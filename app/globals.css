@@ -182,7 +182,20 @@ kbd { font-family: inherit; }
 .schedule-card { padding: 20px 22px; }
 .card-title-row { display: flex; align-items: center; justify-content: space-between; }
 .card-title-row h3, .focus-card h3 { margin: 0; font-size: 15px; letter-spacing: -.02em; }
+.schedule-edit-button { height: 33px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: white; color: var(--blue); font-size: 9px; font-weight: 750; }
+.schedule-edit-button:hover { border-color: rgba(36,87,255,.32); background: #f5f7ff; }
+.schedule-time-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; align-items: end; gap: 10px; margin-top: 15px; padding: 13px; border: 1px solid var(--line); border-radius: 13px; background: #f8f9fc; }
+.schedule-time-editor label { display: grid; gap: 5px; color: var(--muted); font-size: 8px; font-weight: 750; text-transform: uppercase; letter-spacing: .07em; }
+.schedule-time-editor input { width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: white; color: var(--ink); font: inherit; font-size: 10px; font-weight: 700; color-scheme: light; }
+.schedule-time-editor input:focus { border-color: var(--blue); outline: 3px solid rgba(36,87,255,.1); }
+.schedule-editor-actions { display: flex; gap: 7px; }
+.schedule-editor-actions button { height: 36px; padding: 0 11px; border: 1px solid var(--line); border-radius: 9px; background: white; color: var(--muted); font-size: 9px; font-weight: 750; }
+.schedule-editor-actions button[type="submit"] { border-color: var(--blue); background: var(--blue); color: white; }
+.schedule-error { grid-column: 1 / -1; margin: 0; color: #c93854; font-size: 9px; font-weight: 650; }
+.schedule-window { display: flex; align-items: center; gap: 6px; margin-top: 15px; color: var(--ink); font-size: 10px; font-weight: 750; }
+.schedule-window svg { color: var(--blue); }
 .timeline-hours { display: grid; grid-template-columns: repeat(8, 1fr); margin: 17px 0 7px; color: #959aa3; font-size: 8px; }
+.timeline-hours span:last-child { text-align: right; }
 .timeline-track { height: 12px; position: relative; border-radius: 6px; background: repeating-linear-gradient(90deg, #eef0f3 0 calc(12.5% - 2px), transparent calc(12.5% - 2px) 12.5%); }
 .timeline-track .block { position: absolute; height: 12px; border-radius: 4px; }
 .blue-block { left: 0; width: 22%; background: var(--blue); }
@@ -401,6 +414,13 @@ kbd { font-family: inherit; }
 [data-theme="dark"] .round-check.checked { background: var(--blue); border-color: var(--blue); }
 [data-theme="dark"] .task-row { border-bottom-color: #263044; }
 [data-theme="dark"] .timeline-track { background: repeating-linear-gradient(90deg, #202a3c 0 calc(12.5% - 2px), transparent calc(12.5% - 2px) 12.5%); }
+[data-theme="dark"] .schedule-edit-button,
+[data-theme="dark"] .schedule-time-editor,
+[data-theme="dark"] .schedule-time-editor input,
+[data-theme="dark"] .schedule-editor-actions button { border-color: var(--line); background: #0d1422; color: var(--ink); }
+[data-theme="dark"] .schedule-edit-button { color: #9ab0ff; }
+[data-theme="dark"] .schedule-time-editor input { color-scheme: dark; }
+[data-theme="dark"] .schedule-editor-actions button[type="submit"] { border-color: var(--blue); background: var(--blue); color: white; }
 [data-theme="dark"] .bar-chart span { background: #263458; }
 [data-theme="dark"] .analytics-hero { background: linear-gradient(140deg, #304fcf, #1b2f88); }
 [data-theme="dark"] .project-symbol { background: #1b2547; }
@@ -463,6 +483,8 @@ kbd { font-family: inherit; }
   .task-filter-summary { min-width: 0; }
   .task-filter-fields { display: flex; overflow-x: auto; margin-inline: -12px; padding: 1px 12px 5px; scrollbar-width: thin; }
   .task-filter-control { flex: 0 0 148px; }
+  .schedule-time-editor { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .schedule-editor-actions { grid-column: 1 / -1; justify-content: flex-end; }
 }
 
 @media (prefers-reduced-motion: reduce) {

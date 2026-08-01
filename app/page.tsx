@@ -10,7 +10,6 @@ import {
   Cloud,
   CloudOff,
   Clock3,
-  Ellipsis,
   Flame,
   Folder,
   Inbox,
@@ -70,6 +69,11 @@ type Project = {
   description: string;
 };
 
+type ScheduleWindow = {
+  startTime: string;
+  endTime: string;
+};
+
 type SessionUser = {
   id: string;
   username: string;
@@ -82,6 +86,7 @@ type WorkspaceResponse = {
   workspace: {
     tasks: Task[];
     projects: Project[];
+    schedule: ScheduleWindow;
     revision: number;
     updatedAt: string;
   } | null;
@@ -107,6 +112,8 @@ const INITIAL_PROJECTS: Project[] = [
 ];
 
 const PROJECT_COLORS = ["#2457ff", "#8f5dff", "#ff8a34", "#13a57a", "#e74b71", "#0891b2", "#ca8a04", "#7c3aed"];
+const DEFAULT_TODAY_SCHEDULE: ScheduleWindow = { startTime: "09:00", endTime: "17:00" };
+const TIME_VALUE_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: string }> = {
   today: { eyebrow: "", title: "Good morning, AJ", description: "Protect your attention. Move the work that matters." },
@@ -180,7 +187,40 @@ function timeLabel(totalSeconds: number) {
   return `${minutes}:${seconds}`;
 }
 
-function accountStorageKey(kind: "tasks" | "projects", userId: string) {
+function timeValueToMinutes(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  return (hours * 60) + minutes;
+}
+
+function isScheduleWindow(value: unknown): value is ScheduleWindow {
+  if (!value || typeof value !== "object") return false;
+  const schedule = value as Partial<ScheduleWindow>;
+  return typeof schedule.startTime === "string"
+    && typeof schedule.endTime === "string"
+    && TIME_VALUE_PATTERN.test(schedule.startTime)
+    && TIME_VALUE_PATTERN.test(schedule.endTime)
+    && timeValueToMinutes(schedule.startTime) < timeValueToMinutes(schedule.endTime);
+}
+
+function formatScheduleTime(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  const hour = hours % 12 || 12;
+  const suffix = hours < 12 ? "AM" : "PM";
+  return `${hour}${minutes ? `:${String(minutes).padStart(2, "0")}` : ""} ${suffix}`;
+}
+
+function scheduleTimeLabels(schedule: ScheduleWindow) {
+  const start = timeValueToMinutes(schedule.startTime);
+  const end = timeValueToMinutes(schedule.endTime);
+  return Array.from({ length: 5 }, (_, index) => {
+    const point = Math.round(start + ((end - start) * index) / 4);
+    const hours = Math.floor(point / 60).toString().padStart(2, "0");
+    const minutes = (point % 60).toString().padStart(2, "0");
+    return formatScheduleTime(`${hours}:${minutes}`);
+  });
+}
+
+function accountStorageKey(kind: "tasks" | "projects" | "schedule", userId: string) {
   return `orbit-${kind}-v1:${userId}`;
 }
 
@@ -188,11 +228,11 @@ function userInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "AJ";
 }
 
-async function saveWorkspace(tasks: Task[], projects: Project[]) {
+async function saveWorkspace(tasks: Task[], projects: Project[], schedule: ScheduleWindow) {
   const response = await fetch("/api/workspace", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tasks, projects }),
+    body: JSON.stringify({ tasks, projects, schedule }),
   });
   if (!response.ok) throw new Error("Workspace save failed");
   return response.json() as Promise<WorkspaceResponse>;
@@ -202,6 +242,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
   const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
+  const [todaySchedule, setTodaySchedule] = useState<ScheduleWindow>(DEFAULT_TODAY_SCHEDULE);
   const [activeView, setActiveView] = useState<View>(initialView);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(initialProjectId);
   const [search, setSearch] = useState("");
@@ -273,8 +314,10 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     async function hydrateWorkspace() {
       const taskKey = accountStorageKey("tasks", user.id);
       const projectKey = accountStorageKey("projects", user.id);
+      const scheduleKey = accountStorageKey("schedule", user.id);
       let cachedTasks: Task[] | null = null;
       let cachedProjects: Project[] | null = null;
+      let cachedSchedule: ScheduleWindow | null = null;
       let legacyTasksBackup: Task[] = [];
       let legacyProjectsBackup: Project[] = [];
       let legacyRecoveryComplete = false;
@@ -286,7 +329,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         const legacyProjects = user.id === "aj-miller" ? window.localStorage.getItem("orbit-projects-v1") : null;
         const storedTasks = window.localStorage.getItem(taskKey) ?? legacyTasks;
         const storedProjects = window.localStorage.getItem(projectKey) ?? legacyProjects;
-        hasCachedWorkspace = Boolean(storedTasks || storedProjects);
+        const storedSchedule = window.localStorage.getItem(scheduleKey);
+        hasCachedWorkspace = Boolean(storedTasks || storedProjects || storedSchedule);
         if (storedTasks) {
           const parsedTasks = JSON.parse(storedTasks);
           if (Array.isArray(parsedTasks)) cachedTasks = parsedTasks;
@@ -298,6 +342,10 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         if (storedProjects) {
           const parsedProjects = JSON.parse(storedProjects);
           if (Array.isArray(parsedProjects)) cachedProjects = parsedProjects;
+        }
+        if (storedSchedule) {
+          const parsedSchedule = JSON.parse(storedSchedule);
+          if (isScheduleWindow(parsedSchedule)) cachedSchedule = parsedSchedule;
         }
         if (legacyProjects) {
           const parsedLegacyProjects = JSON.parse(legacyProjects);
@@ -312,6 +360,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
       let nextTasks = cachedTasks ?? INITIAL_TASKS;
       let nextProjects = cachedProjects ?? INITIAL_PROJECTS;
+      let nextSchedule = cachedSchedule ?? DEFAULT_TODAY_SCHEDULE;
       let status: SyncStatus = "offline";
       let recoveredLegacyWorkspace = false;
 
@@ -322,8 +371,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         if (workspace) {
           nextTasks = Array.isArray(workspace.tasks) ? workspace.tasks : INITIAL_TASKS;
           nextProjects = Array.isArray(workspace.projects) ? workspace.projects : INITIAL_PROJECTS;
+          nextSchedule = isScheduleWindow(workspace.schedule) ? workspace.schedule : DEFAULT_TODAY_SCHEDULE;
         } else if (hasCachedWorkspace) {
-          await saveWorkspace(nextTasks, nextProjects);
+          await saveWorkspace(nextTasks, nextProjects, nextSchedule);
         }
 
         if (!legacyRecoveryComplete && user.id === "aj-miller" && (legacyTasksBackup.length || legacyProjectsBackup.length)) {
@@ -333,7 +383,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             || JSON.stringify(recoveredProjects) !== JSON.stringify(nextProjects);
           nextTasks = recoveredTasks;
           nextProjects = recoveredProjects;
-          if (recoveredLegacyWorkspace) await saveWorkspace(nextTasks, nextProjects);
+          if (recoveredLegacyWorkspace) await saveWorkspace(nextTasks, nextProjects, nextSchedule);
           window.localStorage.setItem(recoveryKey, "complete");
         }
         status = "synced";
@@ -344,14 +394,16 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       if (!active) return;
       setTasks(nextTasks);
       setProjects(nextProjects);
+      setTodaySchedule(nextSchedule);
       if (recoveredLegacyWorkspace) {
         setToast("Recovered your earlier local tasks and projects, including completion status.");
       }
       setFocusTask((current) => nextTasks.find((task) => task.id === current?.id && !task.completed) ?? nextTasks.find((task) => !task.completed) ?? null);
-      lastSyncedPayload.current = status === "synced" ? JSON.stringify({ tasks: nextTasks, projects: nextProjects }) : "";
+      lastSyncedPayload.current = status === "synced" ? JSON.stringify({ tasks: nextTasks, projects: nextProjects, schedule: nextSchedule }) : "";
       try {
         window.localStorage.setItem(taskKey, JSON.stringify(nextTasks));
         window.localStorage.setItem(projectKey, JSON.stringify(nextProjects));
+        window.localStorage.setItem(scheduleKey, JSON.stringify(nextSchedule));
       } catch {
         // The server copy remains authoritative when browser storage is unavailable.
       }
@@ -366,10 +418,11 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
   useEffect(() => {
     if (!hydrated.current || !sessionUser) return;
-    const payload = JSON.stringify({ tasks, projects });
+    const payload = JSON.stringify({ tasks, projects, schedule: todaySchedule });
     try {
       window.localStorage.setItem(accountStorageKey("tasks", sessionUser.id), JSON.stringify(tasks));
       window.localStorage.setItem(accountStorageKey("projects", sessionUser.id), JSON.stringify(projects));
+      window.localStorage.setItem(accountStorageKey("schedule", sessionUser.id), JSON.stringify(todaySchedule));
     } catch {
       // Continue with cloud sync even if the local cache is unavailable.
     }
@@ -399,7 +452,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [projects, sessionUser, tasks]);
+  }, [projects, sessionUser, tasks, todaySchedule]);
 
   useEffect(() => {
     const loadTheme = window.setTimeout(() => {
@@ -663,6 +716,11 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     setTasks((current) => current.map((task) => task.id === id ? { ...task, status, completed: status === "done" } : task));
   }
 
+  function updateTodaySchedule(schedule: ScheduleWindow) {
+    setTodaySchedule(schedule);
+    setToast(`Today’s schedule updated to ${formatScheduleTime(schedule.startTime)}–${formatScheduleTime(schedule.endTime)}`);
+  }
+
   function openFocus(task: Task | null) {
     const nextTask = task ?? openTasks[0] ?? null;
     if (!nextTask) {
@@ -824,10 +882,12 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               priorities={priorities}
               progress={filteredProgress}
               completedCount={filteredCompletedCount}
+              schedule={todaySchedule}
               onAdd={openNewTask}
               onToggle={toggleTask}
               onEdit={openEditTask}
               onFocus={openFocus}
+              onScheduleChange={updateTodaySchedule}
             />
           )}
           {activeView === "board" && <BoardView tasks={visibleTasks} onMove={moveTask} onToggle={toggleTask} onEdit={openEditTask} />}
@@ -1038,10 +1098,14 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, result
   );
 }
 
-function TodayView({ tasks, openTasks, priorities, progress, completedCount, onAdd, onToggle, onEdit, onFocus }: { tasks: Task[]; openTasks: Task[]; priorities: Task[]; progress: number; completedCount: number; onAdd: () => void; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
+function TodayView({ tasks, openTasks, priorities, progress, completedCount, schedule, onAdd, onToggle, onEdit, onFocus, onScheduleChange }: { tasks: Task[]; openTasks: Task[]; priorities: Task[]; progress: number; completedCount: number; schedule: ScheduleWindow; onAdd: () => void; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void; onScheduleChange: (schedule: ScheduleWindow) => void }) {
   const featured = tasks.filter((task) => !task.completed && task.due === "Today").slice(0, 3);
   const planRef = useRef<HTMLDivElement>(null);
   const [planHighlighted, setPlanHighlighted] = useState(false);
+  const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
+  const [startTimeDraft, setStartTimeDraft] = useState(schedule.startTime);
+  const [endTimeDraft, setEndTimeDraft] = useState(schedule.endTime);
+  const [scheduleError, setScheduleError] = useState("");
 
   useEffect(() => {
     if (!planHighlighted) return;
@@ -1054,6 +1118,31 @@ function TodayView({ tasks, openTasks, priorities, progress, completedCount, onA
     planRef.current?.focus({ preventScroll: true });
     setPlanHighlighted(true);
   }
+
+  function openScheduleEditor() {
+    setStartTimeDraft(schedule.startTime);
+    setEndTimeDraft(schedule.endTime);
+    setScheduleError("");
+    setScheduleEditorOpen(true);
+  }
+
+  function closeScheduleEditor() {
+    setScheduleEditorOpen(false);
+    setScheduleError("");
+  }
+
+  function saveSchedule(event: FormEvent) {
+    event.preventDefault();
+    const nextSchedule = { startTime: startTimeDraft, endTime: endTimeDraft };
+    if (!isScheduleWindow(nextSchedule)) {
+      setScheduleError("End time must be later than start time.");
+      return;
+    }
+    onScheduleChange(nextSchedule);
+    closeScheduleEditor();
+  }
+
+  const timelineLabels = scheduleTimeLabels(schedule);
 
   return (
     <div className="view-stack">
@@ -1072,8 +1161,20 @@ function TodayView({ tasks, openTasks, priorities, progress, completedCount, onA
 
       <section className="lower-grid">
         <div className={`schedule-card ${planHighlighted ? "plan-highlight" : ""}`} id="today-plan" ref={planRef} tabIndex={-1}>
-          <div className="card-title-row"><div><p className="eyebrow">Time map</p><h3>Today&apos;s schedule</h3></div><button className="icon-button"><Ellipsis size={19} /></button></div>
-          <div className="timeline-hours">{["9 AM", "10 AM", "11 AM", "12 PM", "1 PM", "2 PM", "3 PM", "4 PM"].map((hour) => <span key={hour}>{hour}</span>)}</div>
+          <div className="card-title-row">
+            <div><p className="eyebrow">Time map</p><h3>Today&apos;s schedule</h3></div>
+            <button className="schedule-edit-button" type="button" onClick={openScheduleEditor} aria-expanded={scheduleEditorOpen}><Pencil size={14} /> Edit time</button>
+          </div>
+          {scheduleEditorOpen && (
+            <form className="schedule-time-editor" onSubmit={saveSchedule}>
+              <label><span>Start time</span><input type="time" value={startTimeDraft} onChange={(event) => setStartTimeDraft(event.target.value)} required /></label>
+              <label><span>End time</span><input type="time" value={endTimeDraft} onChange={(event) => setEndTimeDraft(event.target.value)} required /></label>
+              <div className="schedule-editor-actions"><button type="button" onClick={closeScheduleEditor}>Cancel</button><button type="submit">Save</button></div>
+              {scheduleError && <p className="schedule-error" role="alert">{scheduleError}</p>}
+            </form>
+          )}
+          <div className="schedule-window"><Clock3 size={14} /><span>{formatScheduleTime(schedule.startTime)}–{formatScheduleTime(schedule.endTime)}</span></div>
+          <div className="timeline-hours" style={{ gridTemplateColumns: `repeat(${timelineLabels.length}, minmax(0, 1fr))` }}>{timelineLabels.map((hour, index) => <span key={`${hour}-${index}`}>{hour}</span>)}</div>
           <div className="timeline-track"><span className="block blue-block" /><span className="block lime-block" /><span className="block violet-block" /></div>
           <div className="schedule-legend"><span><i className="legend-blue" />Focused work · 3h 15m</span><span><i className="legend-lime" />Meetings · 1h</span><span><i className="legend-violet" />Review · 45m</span></div>
         </div>

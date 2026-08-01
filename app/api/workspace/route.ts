@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { getOrbitWorkspace, saveOrbitWorkspace } from "../../../lib/orbit-db";
+import { getOrbitWorkspace, normalizeScheduleWindow, saveOrbitWorkspace, type ScheduleWindow } from "../../../lib/orbit-db";
 import { ORBIT_SESSION_COOKIE, verifyOrbitSession } from "../../../lib/orbit-auth";
 
 const MAX_BODY_BYTES = 600_000;
@@ -37,15 +37,20 @@ export async function PUT(request: Request) {
       return Response.json({ error: "Workspace is too large" }, { status: 413 });
     }
 
-    const body = JSON.parse(rawBody) as { tasks?: unknown; projects?: unknown };
+    const body = JSON.parse(rawBody) as { tasks?: unknown; projects?: unknown; schedule?: unknown };
     if (!Array.isArray(body.tasks) || !Array.isArray(body.projects)) {
       return Response.json({ error: "Tasks and projects must be arrays" }, { status: 400 });
     }
     if (body.tasks.length > MAX_TASKS || body.projects.length > MAX_PROJECTS) {
       return Response.json({ error: "Workspace has too many items" }, { status: 413 });
     }
+    let schedule: ScheduleWindow | undefined;
+    if (body.schedule !== undefined) {
+      schedule = normalizeScheduleWindow(body.schedule) ?? undefined;
+      if (!schedule) return Response.json({ error: "Schedule start and end times are invalid" }, { status: 400 });
+    }
 
-    const workspace = await saveOrbitWorkspace(user.id, body.tasks, body.projects);
+    const workspace = await saveOrbitWorkspace(user.id, body.tasks, body.projects, schedule);
     return Response.json({ workspace }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof SyntaxError) return Response.json({ error: "Invalid JSON" }, { status: 400 });
