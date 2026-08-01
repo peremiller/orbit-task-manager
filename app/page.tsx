@@ -434,8 +434,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       const target = event.target as HTMLElement;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       if (event.key.toLowerCase() === "q") {
+        const defaultProject = projects.find((project) => project.id === activeProjectId)?.name ?? projects[0]?.name ?? "";
         setEditingTask(null);
-        setDraft({ ...emptyDraft, project: projects[0]?.name ?? "" });
+        setDraft({ ...emptyDraft, project: defaultProject });
         setTaskModalOpen(true);
       }
       if (event.key.toLowerCase() === "f") {
@@ -463,7 +464,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     }
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [projects, tasks]);
+  }, [activeProjectId, projects, tasks]);
 
   const visibleTasks = useMemo(() => {
     return filterTasks(tasks, { search, priority: priorityFilter, project: projectFilter, status: statusFilter, due: dueFilter });
@@ -530,8 +531,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   }
 
   function openNewTask() {
+    const defaultProject = projects.find((project) => project.id === activeProjectId)?.name ?? projects[0]?.name ?? "";
     setEditingTask(null);
-    setDraft({ ...emptyDraft, project: projects[0]?.name ?? "" });
+    setDraft({ ...emptyDraft, project: defaultProject });
     setTaskModalOpen(true);
   }
 
@@ -789,8 +791,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               <p>{heading.description}</p>
             </div>
             <div className="heading-actions">
-              <button className="secondary-button" onClick={() => setShowSearch(true)}><Search size={17} /> Search</button>
-              <button className="focus-button" onClick={openFocusPicker}><Zap size={17} fill="currentColor" /> Start focus <kbd>F</kbd></button>
+              <button className="secondary-button" type="button" onClick={() => setShowSearch(true)}><Search size={17} /> Search</button>
+              {activeProject && <button className="primary-button" type="button" onClick={openNewTask}><Plus size={17} /> Add task</button>}
+              <button className="focus-button" type="button" onClick={openFocusPicker}><Zap size={17} fill="currentColor" /> Start focus <kbd>F</kbd></button>
             </div>
           </section>
 
