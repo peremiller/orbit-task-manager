@@ -1,22 +1,15 @@
 import { notFound } from "next/navigation";
 import Home from "../../page";
 
-const PROJECTS: Record<string, string> = {
-  "product-launch": "Product launch",
-  "platform-upgrade": "Platform upgrade",
-  "quality-systems": "Quality systems",
-  "stakeholder-comms": "Stakeholder comms",
-  "team-operations": "Team operations",
-};
+const PROJECT_IDS = ["product-launch", "platform-upgrade", "quality-systems", "stakeholder-comms", "team-operations"];
 
 export function generateStaticParams() {
-  return Object.keys(PROJECTS).map((slug) => ({ slug }));
+  return PROJECT_IDS.map((slug) => ({ slug }));
 }
 
 export default async function ProjectPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const project = PROJECTS[slug];
-  if (!project) notFound();
+  if (!PROJECT_IDS.includes(slug)) notFound();
 
-  return <Home initialView="projects" initialProject={project} />;
+  return <Home initialView="projects" initialProjectId={slug} />;
 }

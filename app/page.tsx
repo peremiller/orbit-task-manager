@@ -21,6 +21,7 @@ import {
   Moon,
   MoreHorizontal,
   Pause,
+  Pencil,
   Play,
   Plus,
   RotateCcw,
@@ -56,6 +57,13 @@ type Task = {
   notes: string;
 };
 
+type Project = {
+  id: string;
+  name: string;
+  color: string;
+  description: string;
+};
+
 const INITIAL_TASKS: Task[] = [
   { id: 1, title: "Finalize release plan", project: "Product launch", due: "Today", time: "10:00 AM", duration: 150, priority: "High", status: "in-progress", completed: false, notes: "Confirm scope, owners, and launch checkpoints." },
   { id: 2, title: "Review migration test scope", project: "Platform upgrade", due: "Today", time: "1:30 PM", duration: 105, priority: "High", status: "todo", completed: false, notes: "Validate SIT and UAT coverage with the QA leads." },
@@ -67,20 +75,12 @@ const INITIAL_TASKS: Task[] = [
   { id: 8, title: "Update project health dashboard", project: "Stakeholder comms", due: "Monday", time: "10:30 AM", duration: 60, priority: "Medium", status: "todo", completed: false, notes: "Refresh delivery confidence and RAID items." },
 ];
 
-const PROJECTS = [
-  { name: "Product launch", color: "#2457ff" },
-  { name: "Platform upgrade", color: "#8f5dff" },
-  { name: "Quality systems", color: "#ff8a34" },
-  { name: "Stakeholder comms", color: "#13a57a" },
-  { name: "Team operations", color: "#e74b71" },
-];
-
-const PROJECT_DESCRIPTIONS = [
-  "Coordinate every detail for a confident release.",
-  "Upgrade safely, without surprises.",
-  "Build quality into every step.",
-  "Keep decisions visible and moving.",
-  "Make teamwork feel effortless.",
+const INITIAL_PROJECTS: Project[] = [
+  { id: "product-launch", name: "Product launch", color: "#2457ff", description: "Coordinate every detail for a confident release." },
+  { id: "platform-upgrade", name: "Platform upgrade", color: "#8f5dff", description: "Upgrade safely, without surprises." },
+  { id: "quality-systems", name: "Quality systems", color: "#ff8a34", description: "Build quality into every step." },
+  { id: "stakeholder-comms", name: "Stakeholder comms", color: "#13a57a", description: "Keep decisions visible and moving." },
+  { id: "team-operations", name: "Team operations", color: "#e74b71", description: "Make teamwork feel effortless." },
 ];
 
 const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: string }> = {
@@ -102,10 +102,6 @@ const VIEW_PATHS: Record<View, string> = {
   analytics: "/insights",
   completed: "/completed",
 };
-
-function projectSlug(name: string) {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-}
 
 const emptyDraft = {
   title: "",
@@ -130,15 +126,18 @@ function timeLabel(totalSeconds: number) {
   return `${minutes}:${seconds}`;
 }
 
-export default function Home({ initialView = "today", initialProject = null }: { initialView?: View; initialProject?: string | null }) {
+export default function Home({ initialView = "today", initialProjectId = null }: { initialView?: View; initialProjectId?: string | null }) {
   const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
   const [activeView, setActiveView] = useState<View>(initialView);
-  const [activeProject, setActiveProject] = useState<string | null>(initialProject);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(initialProjectId);
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<"All" | Priority>("All");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [projectNameDraft, setProjectNameDraft] = useState("");
   const [draft, setDraft] = useState(emptyDraft);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [focusOpen, setFocusOpen] = useState(false);
@@ -155,6 +154,11 @@ export default function Home({ initialView = "today", initialProject = null }: {
       try {
         const stored = window.localStorage.getItem("orbit-tasks-v1");
         if (stored) setTasks(JSON.parse(stored));
+        const storedProjects = window.localStorage.getItem("orbit-projects-v1");
+        if (storedProjects) {
+          const parsedProjects = JSON.parse(storedProjects);
+          if (Array.isArray(parsedProjects) && parsedProjects.length) setProjects(parsedProjects);
+        }
       } catch {
         // Keep the polished starter data if local storage is unavailable.
       }
@@ -167,6 +171,11 @@ export default function Home({ initialView = "today", initialProject = null }: {
     if (!hydrated.current) return;
     window.localStorage.setItem("orbit-tasks-v1", JSON.stringify(tasks));
   }, [tasks]);
+
+  useEffect(() => {
+    if (!hydrated.current) return;
+    window.localStorage.setItem("orbit-projects-v1", JSON.stringify(projects));
+  }, [projects]);
 
   useEffect(() => {
     const loadTheme = window.setTimeout(() => {
@@ -202,7 +211,7 @@ export default function Home({ initialView = "today", initialProject = null }: {
       if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       if (event.key.toLowerCase() === "q") {
         setEditingTask(null);
-        setDraft(emptyDraft);
+        setDraft({ ...emptyDraft, project: projects[0]?.name ?? "" });
         setTaskModalOpen(true);
       }
       if (event.key.toLowerCase() === "f") {
@@ -218,13 +227,14 @@ export default function Home({ initialView = "today", initialProject = null }: {
       }
       if (event.key === "Escape") {
         setTaskModalOpen(false);
+        setEditingProject(null);
         setFocusOpen(false);
         setMobileMenuOpen(false);
       }
     }
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [tasks]);
+  }, [projects, tasks]);
 
   const visibleTasks = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -239,22 +249,23 @@ export default function Home({ initialView = "today", initialProject = null }: {
   const completedCount = tasks.filter((task) => task.completed).length;
   const progress = tasks.length ? Math.round((completedCount / tasks.length) * 100) : 0;
   const priorities = openTasks.filter((task) => task.priority === "High");
+  const activeProject = projects.find((project) => project.id === activeProjectId) ?? null;
   const heading = activeProject
-    ? { eyebrow: "Project workspace", title: activeProject, description: "Keep every task, decision, and next move in one clear orbit." }
+    ? { eyebrow: "Project workspace", title: activeProject.name, description: "Keep every task, decision, and next move in one clear orbit." }
     : VIEW_TITLES[activeView];
 
   function navigate(view: View) {
     setActiveView(view);
-    setActiveProject(null);
+    setActiveProjectId(null);
     setMobileMenuOpen(false);
     router.push(VIEW_PATHS[view]);
   }
 
-  function navigateProject(project: string) {
+  function navigateProject(project: Project) {
     setActiveView("projects");
-    setActiveProject(project);
+    setActiveProjectId(project.id);
     setMobileMenuOpen(false);
-    router.push(`/projects/${projectSlug(project)}`);
+    router.push(`/projects/${project.id}`);
   }
 
   function toggleTheme() {
@@ -267,8 +278,32 @@ export default function Home({ initialView = "today", initialProject = null }: {
 
   function openNewTask() {
     setEditingTask(null);
-    setDraft(emptyDraft);
+    setDraft({ ...emptyDraft, project: projects[0]?.name ?? "" });
     setTaskModalOpen(true);
+  }
+
+  function openRenameProject(project: Project) {
+    setEditingProject(project);
+    setProjectNameDraft(project.name);
+  }
+
+  function renameProject(event: FormEvent) {
+    event.preventDefault();
+    if (!editingProject) return;
+    const nextName = projectNameDraft.trim();
+    if (!nextName) return;
+    const duplicate = projects.some((project) => project.id !== editingProject.id && project.name.toLowerCase() === nextName.toLowerCase());
+    if (duplicate) {
+      setToast("A project with that name already exists");
+      return;
+    }
+
+    const previousName = editingProject.name;
+    setProjects((current) => current.map((project) => project.id === editingProject.id ? { ...project, name: nextName } : project));
+    setTasks((current) => current.map((task) => task.project === previousName ? { ...task, project: nextName } : task));
+    setDraft((current) => current.project === previousName ? { ...current, project: nextName } : current);
+    setEditingProject(null);
+    setToast(`Project renamed to ${nextName}`);
   }
 
   function openEditTask(task: Task) {
@@ -357,8 +392,8 @@ export default function Home({ initialView = "today", initialProject = null }: {
 
         <div className="sidebar-section">
           <div className="section-label"><span>Projects</span><button aria-label="Add project"><Plus size={15} /></button></div>
-          {PROJECTS.slice(0, 4).map((project) => (
-            <button className={activeProject === project.name ? "project-link active" : "project-link"} key={project.name} onClick={() => navigateProject(project.name)}>
+          {projects.slice(0, 4).map((project) => (
+            <button className={activeProjectId === project.id ? "project-link active" : "project-link"} key={project.id} onClick={() => navigateProject(project)}>
               <span className="project-dot" style={{ background: project.color }} />
               <span>{project.name}</span>
               <em>{tasks.filter((task) => task.project === project.name && !task.completed).length}</em>
@@ -423,12 +458,12 @@ export default function Home({ initialView = "today", initialProject = null }: {
             />
           )}
           {activeView === "board" && <BoardView tasks={visibleTasks} onMove={moveTask} onToggle={toggleTask} onEdit={openEditTask} />}
-          {activeView === "upcoming" && <UpcomingView tasks={visibleTasks} onToggle={toggleTask} onEdit={openEditTask} />}
-          {activeView === "inbox" && <ListView tasks={visibleTasks.filter((task) => !task.completed)} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} />}
-          {activeView === "completed" && <ListView tasks={visibleTasks.filter((task) => task.completed)} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} empty="Complete a task and it will appear here." />}
+          {activeView === "upcoming" && <UpcomingView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} />}
+          {activeView === "inbox" && <ListView tasks={visibleTasks.filter((task) => !task.completed)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} />}
+          {activeView === "completed" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
-            ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject)} title={`${activeProject} tasks`} onToggle={toggleTask} onEdit={openEditTask} empty="This project is ready for its first task." />
-            : <ProjectsView tasks={tasks} onOpenProject={navigateProject} />)}
+            ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} empty="This project is ready for its first task." />
+            : <ProjectsView tasks={tasks} projects={projects} onOpenProject={navigateProject} onRenameProject={openRenameProject} />)}
           {activeView === "analytics" && <AnalyticsView tasks={tasks} />}
         </div>
       </main>
@@ -444,7 +479,7 @@ export default function Home({ initialView = "today", initialProject = null }: {
             <div className="modal-header"><div><p className="eyebrow">{editingTask ? "Refine the plan" : "Capture what matters"}</p><h2>{editingTask ? "Edit task" : "New task"}</h2></div><button className="icon-button" type="button" onClick={() => setTaskModalOpen(false)} aria-label="Close"><X size={20} /></button></div>
             <label className="field-label">Task name<input autoFocus value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="What needs to move forward?" required /></label>
             <div className="form-grid">
-              <label className="field-label">Project<select value={draft.project} onChange={(event) => setDraft({ ...draft, project: event.target.value })}>{PROJECTS.map((project) => <option key={project.name}>{project.name}</option>)}</select></label>
+              <label className="field-label">Project<select value={draft.project} onChange={(event) => setDraft({ ...draft, project: event.target.value })}>{projects.map((project) => <option key={project.id}>{project.name}</option>)}</select></label>
               <label className="field-label">Priority<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Priority })}><option>High</option><option>Medium</option><option>Low</option></select></label>
               <label className="field-label">Due<select value={draft.due} onChange={(event) => setDraft({ ...draft, due: event.target.value })}><option>Today</option><option>Tomorrow</option><option>Friday</option><option>Monday</option><option>Someday</option></select></label>
               <label className="field-label">Time<input value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label>
@@ -457,6 +492,17 @@ export default function Home({ initialView = "today", initialProject = null }: {
               <button className="secondary-button" type="button" onClick={() => setTaskModalOpen(false)}>Cancel</button>
               <button className="primary-button" type="submit">{editingTask ? "Save changes" : "Create task"}<ArrowRight size={17} /></button>
             </div>
+          </form>
+        </div>
+      )}
+
+      {editingProject && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setEditingProject(null)}>
+          <form className="task-modal project-rename-modal" onSubmit={renameProject}>
+            <div className="modal-header"><div><p className="eyebrow">Project settings</p><h2>Rename project</h2></div><button className="icon-button" type="button" onClick={() => setEditingProject(null)} aria-label="Close"><X size={20} /></button></div>
+            <label className="field-label">Project name<input autoFocus value={projectNameDraft} onChange={(event) => setProjectNameDraft(event.target.value)} placeholder="Enter a project name" required /></label>
+            <p className="rename-hint"><Pencil size={15} /> Every task in this project will be updated automatically. Its URL and progress history will stay the same.</p>
+            <div className="modal-actions"><span /><button className="secondary-button" type="button" onClick={() => setEditingProject(null)}>Cancel</button><button className="primary-button" type="submit">Save name<ArrowRight size={17} /></button></div>
           </form>
         </div>
       )}
@@ -561,31 +607,30 @@ function BoardView({ tasks, onMove, onToggle, onEdit }: { tasks: Task[]; onMove:
   );
 }
 
-function UpcomingView({ tasks, onToggle, onEdit }: { tasks: Task[]; onToggle: (id: number) => void; onEdit: (task: Task) => void }) {
+function UpcomingView({ tasks, projects, onToggle, onEdit }: { tasks: Task[]; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void }) {
   const days = ["Today", "Tomorrow", "Friday", "Monday", "Someday"];
   return <section className="timeline-list">{days.map((day, dayIndex) => {
     const dayTasks = tasks.filter((task) => task.due === day && !task.completed);
     if (!dayTasks.length) return null;
-    return <div className="timeline-day" key={day}><div className={dayIndex === 0 ? "day-marker current" : "day-marker"}><strong>{day === "Today" ? "01" : String(dayIndex + 2).padStart(2, "0")}</strong><span>{day}</span></div><div className="day-tasks">{dayTasks.map((task) => <TaskRow key={task.id} task={task} onToggle={onToggle} onEdit={onEdit} />)}</div></div>;
+    return <div className="timeline-day" key={day}><div className={dayIndex === 0 ? "day-marker current" : "day-marker"}><strong>{day === "Today" ? "01" : String(dayIndex + 2).padStart(2, "0")}</strong><span>{day}</span></div><div className="day-tasks">{dayTasks.map((task) => <TaskRow key={task.id} task={task} projects={projects} onToggle={onToggle} onEdit={onEdit} />)}</div></div>;
   })}</section>;
 }
 
-function ListView({ tasks, title, onToggle, onEdit, empty = "No tasks match this view." }: { tasks: Task[]; title: string; onToggle: (id: number) => void; onEdit: (task: Task) => void; empty?: string }) {
-  return <section className="list-card"><div className="list-card-header"><div><p className="eyebrow">{tasks.length} tasks</p><h2>{title}</h2></div><button className="secondary-button"><ListFilter size={16} /> Filter</button></div>{tasks.length ? <div className="task-list">{tasks.map((task) => <TaskRow key={task.id} task={task} onToggle={onToggle} onEdit={onEdit} />)}</div> : <div className="empty-list"><CheckCircle2 size={32} /><h3>All clear</h3><p>{empty}</p></div>}</section>;
+function ListView({ tasks, projects, title, onToggle, onEdit, empty = "No tasks match this view." }: { tasks: Task[]; projects: Project[]; title: string; onToggle: (id: number) => void; onEdit: (task: Task) => void; empty?: string }) {
+  return <section className="list-card"><div className="list-card-header"><div><p className="eyebrow">{tasks.length} tasks</p><h2>{title}</h2></div><button className="secondary-button"><ListFilter size={16} /> Filter</button></div>{tasks.length ? <div className="task-list">{tasks.map((task) => <TaskRow key={task.id} task={task} projects={projects} onToggle={onToggle} onEdit={onEdit} />)}</div> : <div className="empty-list"><CheckCircle2 size={32} /><h3>All clear</h3><p>{empty}</p></div>}</section>;
 }
 
-function TaskRow({ task, onToggle, onEdit }: { task: Task; onToggle: (id: number) => void; onEdit: (task: Task) => void }) {
-  return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={`Toggle ${task.title}`}>{task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}</h3><div><span><span className="project-dot" style={{ background: PROJECTS.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.due}</span><span><Clock3 size={13} />{task.time}</span></div></div><span className={`priority-label ${task.priority.toLowerCase()}`}>{task.priority}</span><button className="icon-button" onClick={() => onEdit(task)} aria-label="Edit task"><MoreHorizontal size={18} /></button></article>;
+function TaskRow({ task, projects, onToggle, onEdit }: { task: Task; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void }) {
+  return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={`Toggle ${task.title}`}>{task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}</h3><div><span><span className="project-dot" style={{ background: projects.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.due}</span><span><Clock3 size={13} />{task.time}</span></div></div><span className={`priority-label ${task.priority.toLowerCase()}`}>{task.priority}</span><button className="icon-button" onClick={() => onEdit(task)} aria-label="Edit task"><MoreHorizontal size={18} /></button></article>;
 }
 
-function ProjectsView({ tasks, onOpenProject }: { tasks: Task[]; onOpenProject: (project: string) => void }) {
+function ProjectsView({ tasks, projects, onOpenProject, onRenameProject }: { tasks: Task[]; projects: Project[]; onOpenProject: (project: Project) => void; onRenameProject: (project: Project) => void }) {
   const [layout, setLayout] = useState<"list" | "grid">("list");
-  const projectStats = PROJECTS.map((project, index) => {
+  const projectStats = projects.map((project) => {
     const projectTasks = tasks.filter((task) => task.project === project.name);
     const completed = projectTasks.filter((task) => task.completed).length;
     return {
       ...project,
-      description: PROJECT_DESCRIPTIONS[index],
       taskCount: projectTasks.length,
       openCount: projectTasks.length - completed,
       percent: projectTasks.length ? Math.round((completed / projectTasks.length) * 100) : 0,
@@ -597,7 +642,7 @@ function ProjectsView({ tasks, onOpenProject }: { tasks: Task[]; onOpenProject: 
       <div className="projects-toolbar">
         <div>
           <p className="eyebrow">Portfolio overview</p>
-          <h2>{PROJECTS.length} active projects</h2>
+          <h2>{projects.length} active projects</h2>
         </div>
         <div className="project-view-switch" role="group" aria-label="Project layout">
           <button className={layout === "list" ? "active" : ""} onClick={() => setLayout("list")} aria-pressed={layout === "list"}><Rows3 size={16} /> List</button>
@@ -608,8 +653,8 @@ function ProjectsView({ tasks, onOpenProject }: { tasks: Task[]; onOpenProject: 
       {layout === "list" ? (
         <section className="project-list" aria-label="Projects list">
           {projectStats.map((project) => (
-            <article className="project-list-row" key={project.name}>
-              <button className="project-list-main" onClick={() => onOpenProject(project.name)}>
+            <article className="project-list-row" key={project.id}>
+              <button className="project-list-main" onClick={() => onOpenProject(project)}>
                 <span className="project-list-icon" style={{ background: `${project.color}18`, color: project.color }}><Folder size={20} /></span>
                 <span className="project-list-copy"><strong>{project.name}</strong><small>{project.description}</small></span>
               </button>
@@ -621,20 +666,20 @@ function ProjectsView({ tasks, onOpenProject }: { tasks: Task[]; onOpenProject: 
                 <div><span>Progress</span><strong>{project.percent}%</strong></div>
                 <i><span style={{ width: `${project.percent}%`, background: project.color }} /></i>
               </div>
-              <button className="project-list-open" onClick={() => onOpenProject(project.name)} aria-label={`Open ${project.name}`}><ArrowRight size={17} /></button>
+              <div className="project-list-actions"><button className="project-list-edit" onClick={() => onRenameProject(project)} aria-label={`Rename ${project.name}`}><Pencil size={16} /></button><button className="project-list-open" onClick={() => onOpenProject(project)} aria-label={`Open ${project.name}`}><ArrowRight size={17} /></button></div>
             </article>
           ))}
         </section>
       ) : (
         <section className="project-grid">
           {projectStats.map((project, index) => (
-            <article className={`project-card project-${index + 1}`} key={project.name}>
-              <div className="project-card-top"><span className="project-symbol"><Folder size={21} /></span><button aria-label={`More options for ${project.name}`}><MoreHorizontal size={18} /></button></div>
+            <article className={`project-card project-${index + 1}`} key={project.id}>
+              <div className="project-card-top"><span className="project-symbol"><Folder size={21} /></span><button onClick={() => onRenameProject(project)} aria-label={`Rename ${project.name}`}><Pencil size={18} /></button></div>
               <p className="eyebrow">{project.taskCount} tasks</p>
               <h2>{project.name}</h2>
               <p>{project.description}</p>
               <div className="project-progress"><div><span>Progress</span><strong>{project.percent}%</strong></div><i><span style={{ width: `${project.percent}%`, background: project.color }} /></i></div>
-              <button className="project-open" onClick={() => onOpenProject(project.name)}>Open project <ArrowRight size={16} /></button>
+              <button className="project-open" onClick={() => onOpenProject(project)}>Open project <ArrowRight size={16} /></button>
             </article>
           ))}
         </section>
