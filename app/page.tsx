@@ -84,6 +84,8 @@ const INITIAL_PROJECTS: Project[] = [
   { id: "team-operations", name: "Team operations", color: "#e74b71", description: "Make teamwork feel effortless." },
 ];
 
+const PROJECT_COLORS = ["#2457ff", "#8f5dff", "#ff8a34", "#13a57a", "#e74b71", "#0891b2", "#ca8a04", "#7c3aed"];
+
 const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: string }> = {
   today: { eyebrow: "Saturday, August 1", title: "Good morning, AJ", description: "Protect your attention. Move the work that matters." },
   inbox: { eyebrow: "Capture first, organize later", title: "Inbox", description: "Loose ends and new ideas, ready to be clarified." },
@@ -114,6 +116,31 @@ const emptyDraft = {
   notes: "",
 };
 
+const emptyProjectDraft = {
+  name: "",
+  description: "",
+  color: PROJECT_COLORS[0],
+};
+
+function projectSlug(name: string) {
+  return name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "") || "project";
+}
+
+function uniqueProjectId(name: string, projects: Project[]) {
+  const base = projectSlug(name);
+  const projectIds = new Set(projects.map((project) => project.id));
+  if (!projectIds.has(base)) return base;
+
+  let suffix = 2;
+  while (projectIds.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+
 function formatDuration(minutes: number) {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
@@ -137,6 +164,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [priorityFilter, setPriorityFilter] = useState<"All" | Priority>("All");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [newProjectDraft, setNewProjectDraft] = useState(emptyProjectDraft);
+  const [projectCreateError, setProjectCreateError] = useState("");
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [projectNameDraft, setProjectNameDraft] = useState("");
   const [draft, setDraft] = useState(emptyDraft);
@@ -228,6 +258,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       }
       if (event.key === "Escape") {
         setTaskModalOpen(false);
+        setProjectModalOpen(false);
+        setProjectCreateError("");
         setEditingProject(null);
         setFocusOpen(false);
         setMobileMenuOpen(false);
@@ -251,6 +283,10 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const progress = tasks.length ? Math.round((completedCount / tasks.length) * 100) : 0;
   const priorities = openTasks.filter((task) => task.priority === "High");
   const activeProject = projects.find((project) => project.id === activeProjectId) ?? null;
+  const firstSidebarProjects = projects.slice(0, 4);
+  const sidebarProjects = activeProject && !firstSidebarProjects.some((project) => project.id === activeProject.id)
+    ? [...projects.slice(0, 3), activeProject]
+    : firstSidebarProjects;
   const heading = activeProject
     ? { eyebrow: "Project workspace", title: activeProject.name, description: "Keep every task, decision, and next move in one clear orbit." }
     : VIEW_TITLES[activeView];
@@ -281,6 +317,46 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     setEditingTask(null);
     setDraft({ ...emptyDraft, project: projects[0]?.name ?? "" });
     setTaskModalOpen(true);
+  }
+
+  function openNewProject() {
+    setNewProjectDraft({ ...emptyProjectDraft, color: PROJECT_COLORS[projects.length % PROJECT_COLORS.length] });
+    setProjectCreateError("");
+    setProjectModalOpen(true);
+  }
+
+  function createProject(event: FormEvent) {
+    event.preventDefault();
+    const name = newProjectDraft.name.trim();
+    if (!name) {
+      setProjectCreateError("Enter a project name");
+      return;
+    }
+    if (projects.some((project) => project.name.toLowerCase() === name.toLowerCase())) {
+      setProjectCreateError("A project with that name already exists");
+      return;
+    }
+
+    const project: Project = {
+      id: uniqueProjectId(name, projects),
+      name,
+      color: newProjectDraft.color,
+      description: newProjectDraft.description.trim() || "A clear space to move this outcome forward.",
+    };
+    const nextProjects = [...projects, project];
+    try {
+      window.localStorage.setItem("orbit-projects-v1", JSON.stringify(nextProjects));
+    } catch {
+      setProjectCreateError("Orbit could not save this project on your device. Please try again.");
+      return;
+    }
+    setProjects(nextProjects);
+    setActiveView("projects");
+    setActiveProjectId(project.id);
+    setProjectModalOpen(false);
+    setMobileMenuOpen(false);
+    setToast(`${project.name} created`);
+    router.push(`/projects/${project.id}`);
   }
 
   function openRenameProject(project: Project) {
@@ -406,9 +482,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             >
               Projects
             </Link>
-            <button aria-label="Add project"><Plus size={15} /></button>
+            <button type="button" onClick={openNewProject} aria-label="Add project"><Plus size={15} /></button>
           </div>
-          {projects.slice(0, 4).map((project) => (
+          {sidebarProjects.map((project) => (
             <button className={activeProjectId === project.id ? "project-link active" : "project-link"} key={project.id} onClick={() => navigateProject(project)}>
               <span className="project-dot" style={{ background: project.color }} />
               <span>{project.name}</span>
@@ -479,7 +555,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           {activeView === "completed" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
             ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} empty="This project is ready for its first task." />
-            : <ProjectsView tasks={tasks} projects={projects} onOpenProject={navigateProject} onRenameProject={openRenameProject} />)}
+            : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} />)}
           {activeView === "analytics" && <AnalyticsView tasks={tasks} />}
         </div>
       </main>
@@ -508,6 +584,30 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               <button className="secondary-button" type="button" onClick={() => setTaskModalOpen(false)}>Cancel</button>
               <button className="primary-button" type="submit">{editingTask ? "Save changes" : "Create task"}<ArrowRight size={17} /></button>
             </div>
+          </form>
+        </div>
+      )}
+
+      {projectModalOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setProjectModalOpen(false)}>
+          <form className="task-modal project-create-modal" onSubmit={createProject} role="dialog" aria-modal="true" aria-labelledby="create-project-title">
+            <div className="modal-header"><div><p className="eyebrow">Start a new outcome</p><h2 id="create-project-title">Create project</h2></div><button className="icon-button" type="button" onClick={() => setProjectModalOpen(false)} aria-label="Close"><X size={20} /></button></div>
+            <label className="field-label">Project name<input autoFocus value={newProjectDraft.name} onChange={(event) => { setNewProjectDraft({ ...newProjectDraft, name: event.target.value }); setProjectCreateError(""); }} placeholder="e.g. Customer portal launch" maxLength={60} required /></label>
+            <label className="field-label">Description<textarea value={newProjectDraft.description} onChange={(event) => setNewProjectDraft({ ...newProjectDraft, description: event.target.value })} placeholder="What does success look like?" maxLength={160} rows={3} /></label>
+            <fieldset className="project-color-field">
+              <legend>Project color</legend>
+              <div className="project-color-options">
+                {PROJECT_COLORS.map((color) => (
+                  <button className={newProjectDraft.color === color ? "project-color-option active" : "project-color-option"} type="button" key={color} onClick={() => setNewProjectDraft({ ...newProjectDraft, color })} aria-label={`Use ${color} project color`} aria-pressed={newProjectDraft.color === color}>
+                    <span style={{ background: color }} />
+                    {newProjectDraft.color === color && <Check size={14} />}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            {projectCreateError && <p className="field-error" role="alert">{projectCreateError}</p>}
+            <p className="rename-hint"><Folder size={15} /> Your project will be saved on this device and ready for tasks immediately.</p>
+            <div className="modal-actions"><span /><button className="secondary-button" type="button" onClick={() => setProjectModalOpen(false)}>Cancel</button><button className="primary-button" type="submit">Create project<ArrowRight size={17} /></button></div>
           </form>
         </div>
       )}
@@ -640,7 +740,7 @@ function TaskRow({ task, projects, onToggle, onEdit }: { task: Task; projects: P
   return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={`Toggle ${task.title}`}>{task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}</h3><div><span><span className="project-dot" style={{ background: projects.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.due}</span><span><Clock3 size={13} />{task.time}</span></div></div><span className={`priority-label ${task.priority.toLowerCase()}`}>{task.priority}</span><button className="icon-button" onClick={() => onEdit(task)} aria-label="Edit task"><MoreHorizontal size={18} /></button></article>;
 }
 
-function ProjectsView({ tasks, projects, onOpenProject, onRenameProject }: { tasks: Task[]; projects: Project[]; onOpenProject: (project: Project) => void; onRenameProject: (project: Project) => void }) {
+function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenameProject }: { tasks: Task[]; projects: Project[]; onCreateProject: () => void; onOpenProject: (project: Project) => void; onRenameProject: (project: Project) => void }) {
   const [layout, setLayout] = useState<"list" | "grid">("list");
   const projectStats = projects.map((project) => {
     const projectTasks = tasks.filter((task) => task.project === project.name);
@@ -660,9 +760,12 @@ function ProjectsView({ tasks, projects, onOpenProject, onRenameProject }: { tas
           <p className="eyebrow">Portfolio overview</p>
           <h2>{projects.length} active projects</h2>
         </div>
-        <div className="project-view-switch" role="group" aria-label="Project layout">
-          <button className={layout === "list" ? "active" : ""} onClick={() => setLayout("list")} aria-pressed={layout === "list"}><Rows3 size={16} /> List</button>
-          <button className={layout === "grid" ? "active" : ""} onClick={() => setLayout("grid")} aria-pressed={layout === "grid"}><LayoutGrid size={16} /> Grid</button>
+        <div className="projects-toolbar-actions">
+          <button className="primary-button" type="button" onClick={onCreateProject}><Plus size={16} /> New project</button>
+          <div className="project-view-switch" role="group" aria-label="Project layout">
+            <button type="button" className={layout === "list" ? "active" : ""} onClick={() => setLayout("list")} aria-pressed={layout === "list"}><Rows3 size={16} /> List</button>
+            <button type="button" className={layout === "grid" ? "active" : ""} onClick={() => setLayout("grid")} aria-pressed={layout === "grid"}><LayoutGrid size={16} /> Grid</button>
+          </div>
         </div>
       </div>
 
