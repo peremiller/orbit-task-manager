@@ -34,11 +34,12 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 type Priority = "High" | "Medium" | "Low";
 type TaskStatus = "todo" | "in-progress" | "done";
-type View = "today" | "inbox" | "upcoming" | "board" | "projects" | "analytics" | "completed";
+export type View = "today" | "inbox" | "upcoming" | "board" | "projects" | "analytics" | "completed";
 
 type Task = {
   id: number;
@@ -82,6 +83,20 @@ const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: s
   completed: { eyebrow: "Progress worth noticing", title: "Completed", description: "A record of what you moved forward." },
 };
 
+const VIEW_PATHS: Record<View, string> = {
+  today: "/today",
+  inbox: "/inbox",
+  upcoming: "/upcoming",
+  board: "/board",
+  projects: "/projects",
+  analytics: "/insights",
+  completed: "/completed",
+};
+
+function projectSlug(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
 const emptyDraft = {
   title: "",
   project: "Product launch",
@@ -105,9 +120,11 @@ function timeLabel(totalSeconds: number) {
   return `${minutes}:${seconds}`;
 }
 
-export default function Home() {
+export default function Home({ initialView = "today", initialProject = null }: { initialView?: View; initialProject?: string | null }) {
+  const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
-  const [activeView, setActiveView] = useState<View>("today");
+  const [activeView, setActiveView] = useState<View>(initialView);
+  const [activeProject, setActiveProject] = useState<string | null>(initialProject);
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<"All" | Priority>("All");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
@@ -212,11 +229,22 @@ export default function Home() {
   const completedCount = tasks.filter((task) => task.completed).length;
   const progress = tasks.length ? Math.round((completedCount / tasks.length) * 100) : 0;
   const priorities = openTasks.filter((task) => task.priority === "High");
-  const heading = VIEW_TITLES[activeView];
+  const heading = activeProject
+    ? { eyebrow: "Project workspace", title: activeProject, description: "Keep every task, decision, and next move in one clear orbit." }
+    : VIEW_TITLES[activeView];
 
   function navigate(view: View) {
     setActiveView(view);
+    setActiveProject(null);
     setMobileMenuOpen(false);
+    router.push(VIEW_PATHS[view]);
+  }
+
+  function navigateProject(project: string) {
+    setActiveView("projects");
+    setActiveProject(project);
+    setMobileMenuOpen(false);
+    router.push(`/projects/${projectSlug(project)}`);
   }
 
   function toggleTheme() {
@@ -320,7 +348,7 @@ export default function Home() {
         <div className="sidebar-section">
           <div className="section-label"><span>Projects</span><button aria-label="Add project"><Plus size={15} /></button></div>
           {PROJECTS.slice(0, 4).map((project) => (
-            <button className="project-link" key={project.name} onClick={() => navigate("projects")}>
+            <button className={activeProject === project.name ? "project-link active" : "project-link"} key={project.name} onClick={() => navigateProject(project.name)}>
               <span className="project-dot" style={{ background: project.color }} />
               <span>{project.name}</span>
               <em>{tasks.filter((task) => task.project === project.name && !task.completed).length}</em>
@@ -388,7 +416,9 @@ export default function Home() {
           {activeView === "upcoming" && <UpcomingView tasks={visibleTasks} onToggle={toggleTask} onEdit={openEditTask} />}
           {activeView === "inbox" && <ListView tasks={visibleTasks.filter((task) => !task.completed)} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} />}
           {activeView === "completed" && <ListView tasks={visibleTasks.filter((task) => task.completed)} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} empty="Complete a task and it will appear here." />}
-          {activeView === "projects" && <ProjectsView tasks={tasks} onOpenBoard={() => navigate("board")} />}
+          {activeView === "projects" && (activeProject
+            ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject)} title={`${activeProject} tasks`} onToggle={toggleTask} onEdit={openEditTask} empty="This project is ready for its first task." />
+            : <ProjectsView tasks={tasks} onOpenProject={navigateProject} />)}
           {activeView === "analytics" && <AnalyticsView tasks={tasks} />}
         </div>
       </main>
@@ -538,8 +568,8 @@ function TaskRow({ task, onToggle, onEdit }: { task: Task; onToggle: (id: number
   return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={`Toggle ${task.title}`}>{task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}</h3><div><span><span className="project-dot" style={{ background: PROJECTS.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.due}</span><span><Clock3 size={13} />{task.time}</span></div></div><span className={`priority-label ${task.priority.toLowerCase()}`}>{task.priority}</span><button className="icon-button" onClick={() => onEdit(task)} aria-label="Edit task"><MoreHorizontal size={18} /></button></article>;
 }
 
-function ProjectsView({ tasks, onOpenBoard }: { tasks: Task[]; onOpenBoard: () => void }) {
-  return <section className="project-grid">{PROJECTS.map((project, index) => { const projectTasks = tasks.filter((task) => task.project === project.name); const done = projectTasks.filter((task) => task.completed).length; const percent = projectTasks.length ? Math.round(done / projectTasks.length * 100) : 0; return <article className={`project-card project-${index + 1}`} key={project.name}><div className="project-card-top"><span className="project-symbol"><Folder size={21} /></span><button><MoreHorizontal size={18} /></button></div><p className="eyebrow">{projectTasks.length} tasks</p><h2>{project.name}</h2><p>{["Coordinate every detail for a confident release.", "Upgrade safely, without surprises.", "Build quality into every step.", "Keep decisions visible and moving.", "Make teamwork feel effortless."][index]}</p><div className="project-progress"><div><span>Progress</span><strong>{percent}%</strong></div><i><span style={{ width: `${percent}%`, background: project.color }} /></i></div><button className="project-open" onClick={onOpenBoard}>Open project <ArrowRight size={16} /></button></article>; })}</section>;
+function ProjectsView({ tasks, onOpenProject }: { tasks: Task[]; onOpenProject: (project: string) => void }) {
+  return <section className="project-grid">{PROJECTS.map((project, index) => { const projectTasks = tasks.filter((task) => task.project === project.name); const done = projectTasks.filter((task) => task.completed).length; const percent = projectTasks.length ? Math.round(done / projectTasks.length * 100) : 0; return <article className={`project-card project-${index + 1}`} key={project.name}><div className="project-card-top"><span className="project-symbol"><Folder size={21} /></span><button aria-label={`More options for ${project.name}`}><MoreHorizontal size={18} /></button></div><p className="eyebrow">{projectTasks.length} tasks</p><h2>{project.name}</h2><p>{["Coordinate every detail for a confident release.", "Upgrade safely, without surprises.", "Build quality into every step.", "Keep decisions visible and moving.", "Make teamwork feel effortless."][index]}</p><div className="project-progress"><div><span>Progress</span><strong>{percent}%</strong></div><i><span style={{ width: `${percent}%`, background: project.color }} /></i></div><button className="project-open" onClick={() => onOpenProject(project.name)}>Open project <ArrowRight size={16} /></button></article>; })}</section>;
 }
 
 function AnalyticsView({ tasks }: { tasks: Task[] }) {
