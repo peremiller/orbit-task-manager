@@ -238,7 +238,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         if (active) setSessionUser(user);
       })
       .catch(() => {
-        if (active) router.replace(`/login?returnTo=${encodeURIComponent(window.location.pathname)}`);
+        if (active) window.location.replace(`/login?returnTo=${encodeURIComponent(window.location.pathname)}`);
       });
     return () => { active = false; };
   }, [router]);
