@@ -37,6 +37,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
@@ -391,7 +392,22 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         </nav>
 
         <div className="sidebar-section">
-          <div className="section-label"><span>Projects</span><button aria-label="Add project"><Plus size={15} /></button></div>
+          <div className="section-label">
+            <Link
+              href="/projects"
+              className="section-label-link"
+              aria-label="View all projects"
+              aria-current={activeView === "projects" && !activeProjectId ? "page" : undefined}
+              onClick={() => {
+                setActiveView("projects");
+                setActiveProjectId(null);
+                setMobileMenuOpen(false);
+              }}
+            >
+              Projects
+            </Link>
+            <button aria-label="Add project"><Plus size={15} /></button>
+          </div>
           {projects.slice(0, 4).map((project) => (
             <button className={activeProjectId === project.id ? "project-link active" : "project-link"} key={project.id} onClick={() => navigateProject(project)}>
               <span className="project-dot" style={{ background: project.color }} />
