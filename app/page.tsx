@@ -7,7 +7,6 @@ import {
   CalendarDays,
   Check,
   CheckCircle2,
-  ChevronDown,
   Clock3,
   Ellipsis,
   Flame,
@@ -17,6 +16,7 @@ import {
   LayoutDashboard,
   LayoutGrid,
   ListFilter,
+  LogOut,
   Menu,
   Moon,
   MoreHorizontal,
@@ -63,6 +63,12 @@ type Project = {
   name: string;
   color: string;
   description: string;
+};
+
+type SessionUser = {
+  id: string;
+  username: string;
+  displayName: string;
 };
 
 const INITIAL_TASKS: Task[] = [
@@ -154,6 +160,14 @@ function timeLabel(totalSeconds: number) {
   return `${minutes}:${seconds}`;
 }
 
+function accountStorageKey(kind: "tasks" | "projects", userId: string) {
+  return `orbit-${kind}-v1:${userId}`;
+}
+
+function userInitials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "AJ";
+}
+
 export default function Home({ initialView = "today", initialProjectId = null }: { initialView?: View; initialProjectId?: string | null }) {
   const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
@@ -179,35 +193,62 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [toast, setToast] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
   const hydrated = useRef(false);
 
   useEffect(() => {
+    let active = true;
+    fetch("/api/auth/session", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Unauthorized");
+        return response.json() as Promise<{ user: SessionUser }>;
+      })
+      .then(({ user }) => {
+        if (active) setSessionUser(user);
+      })
+      .catch(() => {
+        if (active) router.replace(`/login?returnTo=${encodeURIComponent(window.location.pathname)}`);
+      });
+    return () => { active = false; };
+  }, [router]);
+
+  useEffect(() => {
+    if (!sessionUser) return;
+    hydrated.current = false;
     const loadSavedTasks = window.setTimeout(() => {
       try {
-        const stored = window.localStorage.getItem("orbit-tasks-v1");
+        const taskKey = accountStorageKey("tasks", sessionUser.id);
+        const projectKey = accountStorageKey("projects", sessionUser.id);
+        const legacyTasks = sessionUser.id === "aj-miller" ? window.localStorage.getItem("orbit-tasks-v1") : null;
+        const legacyProjects = sessionUser.id === "aj-miller" ? window.localStorage.getItem("orbit-projects-v1") : null;
+        const stored = window.localStorage.getItem(taskKey) ?? legacyTasks;
         if (stored) setTasks(JSON.parse(stored));
-        const storedProjects = window.localStorage.getItem("orbit-projects-v1");
+        if (!window.localStorage.getItem(taskKey) && legacyTasks) window.localStorage.setItem(taskKey, legacyTasks);
+        const storedProjects = window.localStorage.getItem(projectKey) ?? legacyProjects;
         if (storedProjects) {
           const parsedProjects = JSON.parse(storedProjects);
           if (Array.isArray(parsedProjects) && parsedProjects.length) setProjects(parsedProjects);
         }
+        if (!window.localStorage.getItem(projectKey) && legacyProjects) window.localStorage.setItem(projectKey, legacyProjects);
       } catch {
         // Keep the polished starter data if local storage is unavailable.
       }
       hydrated.current = true;
+      setWorkspaceReady(true);
     }, 0);
     return () => window.clearTimeout(loadSavedTasks);
-  }, []);
+  }, [sessionUser]);
 
   useEffect(() => {
-    if (!hydrated.current) return;
-    window.localStorage.setItem("orbit-tasks-v1", JSON.stringify(tasks));
-  }, [tasks]);
+    if (!hydrated.current || !sessionUser) return;
+    window.localStorage.setItem(accountStorageKey("tasks", sessionUser.id), JSON.stringify(tasks));
+  }, [tasks, sessionUser]);
 
   useEffect(() => {
-    if (!hydrated.current) return;
-    window.localStorage.setItem("orbit-projects-v1", JSON.stringify(projects));
-  }, [projects]);
+    if (!hydrated.current || !sessionUser) return;
+    window.localStorage.setItem(accountStorageKey("projects", sessionUser.id), JSON.stringify(projects));
+  }, [projects, sessionUser]);
 
   useEffect(() => {
     const loadTheme = window.setTimeout(() => {
@@ -292,7 +333,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     : firstSidebarProjects;
   const heading = activeProject
     ? { eyebrow: "Project workspace", title: activeProject.name, description: "Keep every task, decision, and next move in one clear orbit." }
-    : VIEW_TITLES[activeView];
+    : activeView === "today"
+      ? { ...VIEW_TITLES.today, title: `Good morning, ${sessionUser?.displayName.split(" ")[0] ?? "there"}` }
+      : VIEW_TITLES[activeView];
 
   function navigate(view: View) {
     setActiveView(view);
@@ -348,7 +391,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     };
     const nextProjects = [...projects, project];
     try {
-      window.localStorage.setItem("orbit-projects-v1", JSON.stringify(nextProjects));
+      if (!sessionUser) throw new Error("No authenticated account");
+      window.localStorage.setItem(accountStorageKey("projects", sessionUser.id), JSON.stringify(nextProjects));
     } catch {
       setProjectCreateError("Orbit could not save this project on your device. Please try again.");
       return;
@@ -462,6 +506,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
   return (
     <div className="app-shell">
+      {!workspaceReady && <div className="workspace-loading" role="status"><div className="brand-mark" aria-hidden="true"><span /><i /></div><strong>Preparing your Orbit…</strong></div>}
       <aside className={`sidebar ${mobileMenuOpen ? "sidebar-open" : ""}`}>
         <div className="brand-row">
           <div className="brand-mark" aria-hidden="true"><span /><i /></div>
@@ -517,7 +562,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             <span className="note-orbit" />
           </div>
           <button className="nav-item"><Settings size={19} /><span>Settings</span></button>
-          <p className="local-save"><Check size={13} /> Saved on this device</p>
+          <p className="local-save"><Check size={13} /> Saved for {sessionUser?.displayName ?? "your account"}</p>
         </div>
       </aside>
 
@@ -536,7 +581,11 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               {theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}
             </button>
             <button className="icon-button" aria-label="Notifications"><Bell size={19} /><span className="notification-dot" /></button>
-            <div className="profile"><div className="avatar">AJ<span /></div><div><strong>AJ Miller</strong><small>Personal workspace</small></div><ChevronDown size={16} /></div>
+            <div className="profile">
+              <div className="avatar">{userInitials(sessionUser?.displayName ?? "AJ Miller")}<span /></div>
+              <div><strong>{sessionUser?.displayName ?? "AJ Miller"}</strong><small>@{sessionUser?.username ?? "aj.miller"}</small></div>
+              <form action="/api/auth/logout" method="post"><button className="profile-logout" type="submit" aria-label="Sign out" title="Sign out"><LogOut size={17} /></button></form>
+            </div>
           </div>
         </header>
 

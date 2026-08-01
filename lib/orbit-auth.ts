@@ -1,0 +1,85 @@
+import { createHmac, scryptSync, timingSafeEqual } from "node:crypto";
+
+export const ORBIT_SESSION_COOKIE = "orbit_session";
+
+export type OrbitUser = {
+  id: string;
+  username: string;
+  displayName: string;
+};
+
+type SessionPayload = OrbitUser & {
+  expiresAt: number;
+};
+
+const DEFAULT_USER: OrbitUser = {
+  id: "aj-miller",
+  username: "aj.miller",
+  displayName: "AJ Miller",
+};
+
+const PASSWORD_SALT = "orbit-aj-2026-v1";
+const PASSWORD_HASH = "ade74ee4ae698477cc7077e0aff407cd6a65e450f731a763e43d799ea484a508f5a4abdbfc9f267e03dd9784eda27cb6707f4f30294de24b71bdd815d00fc476";
+const SESSION_SECRET = process.env.ORBIT_SESSION_SECRET ?? "orbit-ff4ab70-66f40dfb7dd13cbb9af05ae457f86f260ba2e099f262add4";
+const SESSION_LIFETIME_SECONDS = 60 * 60 * 24 * 7;
+
+export function authenticateOrbitUser(username: string, password: string): OrbitUser | null {
+  const normalizedUsername = username.trim().toLowerCase();
+  const expectedUsername = process.env.ORBIT_ADMIN_USERNAME?.trim().toLowerCase() ?? DEFAULT_USER.username;
+  if (!safeTextEqual(normalizedUsername, expectedUsername)) return null;
+
+  const suppliedHash = scryptSync(password, process.env.ORBIT_PASSWORD_SALT ?? PASSWORD_SALT, 64);
+  const expectedHash = Buffer.from(process.env.ORBIT_PASSWORD_HASH ?? PASSWORD_HASH, "hex");
+  if (suppliedHash.length !== expectedHash.length || !timingSafeEqual(suppliedHash, expectedHash)) return null;
+
+  return {
+    id: process.env.ORBIT_ADMIN_USER_ID ?? DEFAULT_USER.id,
+    username: expectedUsername,
+    displayName: process.env.ORBIT_ADMIN_DISPLAY_NAME ?? DEFAULT_USER.displayName,
+  };
+}
+
+export function createOrbitSession(user: OrbitUser): string {
+  const payload: SessionPayload = {
+    ...user,
+    expiresAt: Math.floor(Date.now() / 1000) + SESSION_LIFETIME_SECONDS,
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${encodedPayload}.${sign(encodedPayload)}`;
+}
+
+export function verifyOrbitSession(token: string | undefined): OrbitUser | null {
+  if (!token) return null;
+  const [encodedPayload, suppliedSignature, extra] = token.split(".");
+  if (!encodedPayload || !suppliedSignature || extra) return null;
+  if (!safeTextEqual(suppliedSignature, sign(encodedPayload))) return null;
+
+  try {
+    const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as SessionPayload;
+    if (!payload.id || !payload.username || !payload.displayName || payload.expiresAt <= Math.floor(Date.now() / 1000)) return null;
+    return { id: payload.id, username: payload.username, displayName: payload.displayName };
+  } catch {
+    return null;
+  }
+}
+
+export function safeReturnTo(value: string | null | undefined): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/today";
+  try {
+    const url = new URL(value, "https://orbit.local");
+    if (url.origin !== "https://orbit.local" || url.pathname === "/login" || url.pathname.startsWith("/api/auth")) return "/today";
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "/today";
+  }
+}
+
+function sign(value: string): string {
+  return createHmac("sha256", SESSION_SECRET).update(value).digest("base64url");
+}
+
+function safeTextEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}

@@ -3,5 +3,6 @@
 /.vercel/
 /graphify-out/
 .env*
+!.env.example
 npm-debug.log*
 .DS_Store
