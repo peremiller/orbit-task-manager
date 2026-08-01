@@ -74,6 +74,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .note-orbit { position: absolute; width: 115px; height: 115px; right: -36px; bottom: -66px; border: 1px dashed #a9baff; border-radius: 50%; }
 .note-orbit::after { content: ""; position: absolute; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); left: 7px; top: 17px; }
 .local-save { display: flex; align-items: center; gap: 6px; margin: 0 12px; color: #a0a5ae; font-size: 9px; }
+.local-save.synced { color: #5b756b; }
+.local-save.offline { color: #b35a34; }
+.local-save.syncing svg,
+.local-save.loading svg { animation: orbit-rotate 1.2s linear infinite; }
 .workspace { grid-column: 2; min-width: 0; }
 .topbar { height: 84px; display: flex; align-items: center; justify-content: flex-end; gap: 18px; padding: 0 38px; border-bottom: 1px solid rgba(221,225,231,.85); background: rgba(247,245,239,.78); backdrop-filter: blur(15px); position: sticky; top: 0; z-index: 20; }
 .search-box { width: min(360px, 32vw); height: 43px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: 1px solid var(--line); border-radius: 13px; background: white; color: #8a909a; transition: .2s ease; }
@@ -274,6 +278,7 @@ kbd { font-family: inherit; }
 .workspace-loading { position: fixed; z-index: 220; inset: 0; display: grid; place-items: center; align-content: center; gap: 18px; background: var(--canvas); color: var(--ink); }
 .workspace-loading .brand-mark { animation: orbit-rotate 1.8s linear infinite; }
 .workspace-loading strong { font-size: 12px; letter-spacing: .02em; }
+.schedule-card.plan-highlight { outline: 3px solid rgba(36,87,255,.22); outline-offset: 4px; box-shadow: 0 20px 44px rgba(36,87,255,.15); }
 .login-shell { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.06fr) minmax(440px, .94fr); background: var(--paper); }
 .login-story { position: relative; min-height: 100vh; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; padding: clamp(36px, 5vw, 76px); background: radial-gradient(circle at 75% 22%, rgba(201,255,61,.22), transparent 24%), linear-gradient(145deg, #173ecb 0%, #2457ff 52%, #1738ad 100%); color: white; }
 .login-brand { position: relative; z-index: 2; display: flex; align-items: center; gap: 13px; }

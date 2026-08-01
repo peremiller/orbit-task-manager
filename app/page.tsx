@@ -7,6 +7,8 @@ import {
   CalendarDays,
   Check,
   CheckCircle2,
+  Cloud,
+  CloudOff,
   Clock3,
   Ellipsis,
   Flame,
@@ -69,6 +71,17 @@ type SessionUser = {
   id: string;
   username: string;
   displayName: string;
+};
+
+type SyncStatus = "loading" | "syncing" | "synced" | "offline";
+
+type WorkspaceResponse = {
+  workspace: {
+    tasks: Task[];
+    projects: Project[];
+    revision: number;
+    updatedAt: string;
+  } | null;
 };
 
 const INITIAL_TASKS: Task[] = [
@@ -168,6 +181,16 @@ function userInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "AJ";
 }
 
+async function saveWorkspace(tasks: Task[], projects: Project[]) {
+  const response = await fetch("/api/workspace", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tasks, projects }),
+  });
+  if (!response.ok) throw new Error("Workspace save failed");
+  return response.json() as Promise<WorkspaceResponse>;
+}
+
 export default function Home({ initialView = "today", initialProjectId = null }: { initialView?: View; initialProjectId?: string | null }) {
   const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
@@ -195,7 +218,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
   const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("loading");
   const hydrated = useRef(false);
+  const lastSyncedPayload = useRef("");
 
   useEffect(() => {
     let active = true;
@@ -215,40 +240,112 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
   useEffect(() => {
     if (!sessionUser) return;
+    const user = sessionUser;
+    let active = true;
     hydrated.current = false;
-    const loadSavedTasks = window.setTimeout(() => {
+
+    async function hydrateWorkspace() {
+      const taskKey = accountStorageKey("tasks", user.id);
+      const projectKey = accountStorageKey("projects", user.id);
+      let cachedTasks: Task[] | null = null;
+      let cachedProjects: Project[] | null = null;
+      let hasCachedWorkspace = false;
+
       try {
-        const taskKey = accountStorageKey("tasks", sessionUser.id);
-        const projectKey = accountStorageKey("projects", sessionUser.id);
-        const legacyTasks = sessionUser.id === "aj-miller" ? window.localStorage.getItem("orbit-tasks-v1") : null;
-        const legacyProjects = sessionUser.id === "aj-miller" ? window.localStorage.getItem("orbit-projects-v1") : null;
-        const stored = window.localStorage.getItem(taskKey) ?? legacyTasks;
-        if (stored) setTasks(JSON.parse(stored));
-        if (!window.localStorage.getItem(taskKey) && legacyTasks) window.localStorage.setItem(taskKey, legacyTasks);
+        const legacyTasks = user.id === "aj-miller" ? window.localStorage.getItem("orbit-tasks-v1") : null;
+        const legacyProjects = user.id === "aj-miller" ? window.localStorage.getItem("orbit-projects-v1") : null;
+        const storedTasks = window.localStorage.getItem(taskKey) ?? legacyTasks;
         const storedProjects = window.localStorage.getItem(projectKey) ?? legacyProjects;
+        hasCachedWorkspace = Boolean(storedTasks || storedProjects);
+        if (storedTasks) {
+          const parsedTasks = JSON.parse(storedTasks);
+          if (Array.isArray(parsedTasks)) cachedTasks = parsedTasks;
+        }
         if (storedProjects) {
           const parsedProjects = JSON.parse(storedProjects);
-          if (Array.isArray(parsedProjects) && parsedProjects.length) setProjects(parsedProjects);
+          if (Array.isArray(parsedProjects)) cachedProjects = parsedProjects;
         }
+        if (!window.localStorage.getItem(taskKey) && legacyTasks) window.localStorage.setItem(taskKey, legacyTasks);
         if (!window.localStorage.getItem(projectKey) && legacyProjects) window.localStorage.setItem(projectKey, legacyProjects);
       } catch {
-        // Keep the polished starter data if local storage is unavailable.
+        // Cloud storage can still load when the browser cache is unavailable.
+      }
+
+      let nextTasks = cachedTasks ?? INITIAL_TASKS;
+      let nextProjects = cachedProjects ?? INITIAL_PROJECTS;
+      let status: SyncStatus = "offline";
+
+      try {
+        const response = await fetch("/api/workspace", { cache: "no-store" });
+        if (!response.ok) throw new Error("Workspace load failed");
+        const { workspace } = await response.json() as WorkspaceResponse;
+        if (workspace) {
+          nextTasks = Array.isArray(workspace.tasks) ? workspace.tasks : INITIAL_TASKS;
+          nextProjects = Array.isArray(workspace.projects) ? workspace.projects : INITIAL_PROJECTS;
+        } else if (hasCachedWorkspace) {
+          await saveWorkspace(nextTasks, nextProjects);
+        }
+        status = "synced";
+      } catch {
+        status = "offline";
+      }
+
+      if (!active) return;
+      setTasks(nextTasks);
+      setProjects(nextProjects);
+      setFocusTask((current) => nextTasks.find((task) => task.id === current?.id && !task.completed) ?? nextTasks.find((task) => !task.completed) ?? null);
+      lastSyncedPayload.current = status === "synced" ? JSON.stringify({ tasks: nextTasks, projects: nextProjects }) : "";
+      try {
+        window.localStorage.setItem(taskKey, JSON.stringify(nextTasks));
+        window.localStorage.setItem(projectKey, JSON.stringify(nextProjects));
+      } catch {
+        // The server copy remains authoritative when browser storage is unavailable.
       }
       hydrated.current = true;
+      setSyncStatus(status);
       setWorkspaceReady(true);
-    }, 0);
-    return () => window.clearTimeout(loadSavedTasks);
+    }
+
+    void hydrateWorkspace();
+    return () => { active = false; };
   }, [sessionUser]);
 
   useEffect(() => {
     if (!hydrated.current || !sessionUser) return;
-    window.localStorage.setItem(accountStorageKey("tasks", sessionUser.id), JSON.stringify(tasks));
-  }, [tasks, sessionUser]);
+    const payload = JSON.stringify({ tasks, projects });
+    try {
+      window.localStorage.setItem(accountStorageKey("tasks", sessionUser.id), JSON.stringify(tasks));
+      window.localStorage.setItem(accountStorageKey("projects", sessionUser.id), JSON.stringify(projects));
+    } catch {
+      // Continue with cloud sync even if the local cache is unavailable.
+    }
+    if (payload === lastSyncedPayload.current) return;
 
-  useEffect(() => {
-    if (!hydrated.current || !sessionUser) return;
-    window.localStorage.setItem(accountStorageKey("projects", sessionUser.id), JSON.stringify(projects));
-  }, [projects, sessionUser]);
+    const controller = new AbortController();
+    setSyncStatus("syncing");
+    const timer = window.setTimeout(() => {
+      fetch("/api/workspace", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+        signal: controller.signal,
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error("Workspace save failed");
+          lastSyncedPayload.current = payload;
+          setSyncStatus("synced");
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+          setSyncStatus("offline");
+        });
+    }, 500);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [projects, sessionUser, tasks]);
 
   useEffect(() => {
     const loadTheme = window.setTimeout(() => {
@@ -390,13 +487,6 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       description: newProjectDraft.description.trim() || "A clear space to move this outcome forward.",
     };
     const nextProjects = [...projects, project];
-    try {
-      if (!sessionUser) throw new Error("No authenticated account");
-      window.localStorage.setItem(accountStorageKey("projects", sessionUser.id), JSON.stringify(nextProjects));
-    } catch {
-      setProjectCreateError("Orbit could not save this project on your device. Please try again.");
-      return;
-    }
     setProjects(nextProjects);
     setActiveView("projects");
     setActiveProjectId(project.id);
@@ -562,7 +652,10 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             <span className="note-orbit" />
           </div>
           <button className="nav-item"><Settings size={19} /><span>Settings</span></button>
-          <p className="local-save"><Check size={13} /> Saved for {sessionUser?.displayName ?? "your account"}</p>
+          <p className={`local-save ${syncStatus}`}>
+            {syncStatus === "offline" ? <CloudOff size={13} /> : syncStatus === "syncing" || syncStatus === "loading" ? <RotateCcw size={13} /> : <Cloud size={13} />}
+            {syncStatus === "offline" ? "Offline — changes cached" : syncStatus === "syncing" || syncStatus === "loading" ? "Syncing across devices…" : `Synced for ${sessionUser?.displayName ?? "your account"}`}
+          </p>
         </div>
       </aside>
 
@@ -672,7 +765,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               </div>
             </fieldset>
             {projectCreateError && <p className="field-error" role="alert">{projectCreateError}</p>}
-            <p className="rename-hint"><Folder size={15} /> Your project will be saved on this device and ready for tasks immediately.</p>
+            <p className="rename-hint"><Cloud size={15} /> Your project will sync to every device signed in to this account.</p>
             <div className="modal-actions"><span /><button className="secondary-button" type="button" onClick={() => setProjectModalOpen(false)}>Cancel</button><button className="primary-button" type="submit">Create project<ArrowRight size={17} /></button></div>
           </form>
         </div>
@@ -748,10 +841,18 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 function TodayView({ tasks, openTasks, priorities, progress, completedCount, onAdd, onToggle, onEdit, onFocus }: { tasks: Task[]; openTasks: Task[]; priorities: Task[]; progress: number; completedCount: number; onAdd: () => void; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
   const featured = tasks.filter((task) => !task.completed && task.due === "Today").slice(0, 3);
   const planRef = useRef<HTMLDivElement>(null);
+  const [planHighlighted, setPlanHighlighted] = useState(false);
+
+  useEffect(() => {
+    if (!planHighlighted) return;
+    const timer = window.setTimeout(() => setPlanHighlighted(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [planHighlighted]);
 
   function viewPlan() {
     planRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     planRef.current?.focus({ preventScroll: true });
+    setPlanHighlighted(true);
   }
 
   return (
@@ -770,7 +871,7 @@ function TodayView({ tasks, openTasks, priorities, progress, completedCount, onA
       </section>
 
       <section className="lower-grid">
-        <div className="schedule-card" id="today-plan" ref={planRef} tabIndex={-1}>
+        <div className={`schedule-card ${planHighlighted ? "plan-highlight" : ""}`} id="today-plan" ref={planRef} tabIndex={-1}>
           <div className="card-title-row"><div><p className="eyebrow">Time map</p><h3>Today&apos;s schedule</h3></div><button className="icon-button"><Ellipsis size={19} /></button></div>
           <div className="timeline-hours">{["9 AM", "10 AM", "11 AM", "12 PM", "1 PM", "2 PM", "3 PM", "4 PM"].map((hour) => <span key={hour}>{hour}</span>)}</div>
           <div className="timeline-track"><span className="block blue-block" /><span className="block lime-block" /><span className="block violet-block" /></div>

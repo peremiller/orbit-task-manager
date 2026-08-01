@@ -1,4 +1,4 @@
-import { ArrowRight, CheckCircle2, Focus, LockKeyhole, Orbit as OrbitIcon, ShieldCheck } from "lucide-react";
+import { ArrowRight, CheckCircle2, Cloud, LockKeyhole, Orbit as OrbitIcon, ShieldCheck } from "lucide-react";
 import { safeReturnTo } from "../../lib/orbit-auth";
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string; returnTo?: string }> }) {
@@ -27,13 +27,13 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           <div className="login-lock"><LockKeyhole size={22} /></div>
           <p className="eyebrow">Welcome back</p>
           <h2>Sign in to Orbit</h2>
-          <p className="login-intro">Your work stays separated from every other account on this device.</p>
+          <p className="login-intro">Your work stays private to your account and follows you across devices.</p>
           <input type="hidden" name="returnTo" value={returnTo} />
           <label className="field-label">Username<input name="username" defaultValue="aj.miller" autoComplete="username" autoFocus required /></label>
           <label className="field-label">Password<input name="password" type="password" autoComplete="current-password" placeholder="Enter your password" required /></label>
           {query.error === "invalid" && <p className="login-error" role="alert">The username or password is incorrect. Please try again.</p>}
           <button className="login-submit" type="submit">Sign in <ArrowRight size={18} /></button>
-          <p className="login-device-note"><Focus size={15} /> Tasks and projects are stored privately per account on this device.</p>
+          <p className="login-device-note"><Cloud size={15} /> Tasks and projects sync securely anywhere you sign in.</p>
         </form>
       </section>
     </main>

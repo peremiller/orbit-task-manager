@@ -20,7 +20,7 @@ const DEFAULT_USER: OrbitUser = {
 
 const PASSWORD_SALT = "orbit-aj-2026-v1";
 const PASSWORD_HASH = "ade74ee4ae698477cc7077e0aff407cd6a65e450f731a763e43d799ea484a508f5a4abdbfc9f267e03dd9784eda27cb6707f4f30294de24b71bdd815d00fc476";
-const SESSION_SECRET = process.env.ORBIT_SESSION_SECRET ?? "orbit-ff4ab70-66f40dfb7dd13cbb9af05ae457f86f260ba2e099f262add4";
+const DEVELOPMENT_SESSION_SECRET = "orbit-local-development-session-secret";
 const SESSION_LIFETIME_SECONDS = 60 * 60 * 24 * 7;
 
 export function authenticateOrbitUser(username: string, password: string): OrbitUser | null {
@@ -75,7 +75,11 @@ export function safeReturnTo(value: string | null | undefined): string {
 }
 
 function sign(value: string): string {
-  return createHmac("sha256", SESSION_SECRET).update(value).digest("base64url");
+  const sessionSecret = process.env.ORBIT_SESSION_SECRET;
+  if (!sessionSecret && process.env.NODE_ENV === "production") {
+    throw new Error("ORBIT_SESSION_SECRET is required in production");
+  }
+  return createHmac("sha256", sessionSecret ?? DEVELOPMENT_SESSION_SECRET).update(value).digest("base64url");
 }
 
 function safeTextEqual(left: string, right: string): boolean {
