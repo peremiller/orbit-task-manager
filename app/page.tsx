@@ -45,7 +45,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { filterTasks } from "@/lib/task-filters";
 import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-recovery";
 
-type Priority = "High" | "Medium" | "Low";
+type Priority = "Very High" | "High" | "Medium" | "Low";
 type TaskStatus = "todo" | "in-progress" | "done";
 type StatusFilter = "All" | TaskStatus;
 export type View = "today" | "inbox" | "upcoming" | "board" | "projects" | "analytics" | "completed";
@@ -170,6 +170,10 @@ function formatDuration(minutes: number) {
   return mins ? `${hours}h ${mins}m` : `${hours}h`;
 }
 
+function priorityClass(priority: Priority) {
+  return priority.toLowerCase().replaceAll(" ", "-");
+}
+
 function timeLabel(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
   const seconds = (totalSeconds % 60).toString().padStart(2, "0");
@@ -211,6 +215,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [newProjectDraft, setNewProjectDraft] = useState(emptyProjectDraft);
   const [projectCreateError, setProjectCreateError] = useState("");
   const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [deletingProject, setDeletingProject] = useState<Project | null>(null);
   const [projectNameDraft, setProjectNameDraft] = useState("");
   const [draft, setDraft] = useState(emptyDraft);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -434,6 +439,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         setProjectModalOpen(false);
         setProjectCreateError("");
         setEditingProject(null);
+        setDeletingProject(null);
         setFocusPickerOpen(false);
         setFocusOpen(false);
         setTimerRunning(false);
@@ -453,12 +459,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const filteredOpenTasks = visibleTasks.filter((task) => !task.completed);
   const filteredCompletedCount = visibleTasks.filter((task) => task.completed).length;
   const filteredProgress = visibleTasks.length ? Math.round((filteredCompletedCount / visibleTasks.length) * 100) : 0;
-  const priorities = filteredOpenTasks.filter((task) => task.priority === "High");
+  const priorities = filteredOpenTasks.filter((task) => task.priority === "Very High" || task.priority === "High");
   const activeProject = projects.find((project) => project.id === activeProjectId) ?? null;
-  const firstSidebarProjects = projects.slice(0, 4);
-  const sidebarProjects = activeProject && !firstSidebarProjects.some((project) => project.id === activeProject.id)
-    ? [...projects.slice(0, 3), activeProject]
-    : firstSidebarProjects;
   const heading = activeProject
     ? { eyebrow: "Project workspace", title: activeProject.name, description: "Keep every task, decision, and next move in one clear orbit." }
     : activeView === "today"
@@ -555,6 +557,29 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   function openRenameProject(project: Project) {
     setEditingProject(project);
     setProjectNameDraft(project.name);
+  }
+
+  function deleteProject() {
+    if (!deletingProject) return;
+    const project = deletingProject;
+    const remainingProjects = projects.filter((item) => item.id !== project.id);
+    const remainingTasks = tasks.filter((task) => task.project !== project.name);
+    const deletedTaskCount = tasks.length - remainingTasks.length;
+
+    setProjects(remainingProjects);
+    setTasks(remainingTasks);
+    setFocusTask((current) => current?.project === project.name ? remainingTasks.find((task) => !task.completed) ?? null : current);
+    if (projectFilter === project.name) setProjectFilter("All");
+    if (draft.project === project.name) setDraft((current) => ({ ...current, project: remainingProjects[0]?.name ?? "" }));
+    if (activeProjectId === project.id) {
+      setActiveProjectId(null);
+      setActiveView("projects");
+      router.push("/projects");
+    }
+    setDeletingProject(null);
+    setFocusOpen(false);
+    setFocusPickerOpen(false);
+    setToast(`${project.name} and ${deletedTaskCount} task${deletedTaskCount === 1 ? "" : "s"} deleted`);
   }
 
   function renameProject(event: FormEvent) {
@@ -693,13 +718,15 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             </Link>
             <button type="button" onClick={openNewProject} aria-label="Add project"><Plus size={15} /></button>
           </div>
-          {sidebarProjects.map((project) => (
-            <button className={activeProjectId === project.id ? "project-link active" : "project-link"} key={project.id} onClick={() => navigateProject(project)}>
-              <span className="project-dot" style={{ background: project.color }} />
-              <span>{project.name}</span>
-              <em>{tasks.filter((task) => task.project === project.name && !task.completed).length}</em>
-            </button>
-          ))}
+          <div className="sidebar-project-list" aria-label={`All ${projects.length} projects`}>
+            {projects.map((project) => (
+              <button className={activeProjectId === project.id ? "project-link active" : "project-link"} key={project.id} onClick={() => navigateProject(project)}>
+                <span className="project-dot" style={{ background: project.color }} />
+                <span>{project.name}</span>
+                <em>{tasks.filter((task) => task.project === project.name && !task.completed).length}</em>
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="sidebar-footer">
@@ -791,7 +818,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           {activeView === "completed" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
             ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} empty="This project is ready for its first task." />
-            : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} />)}
+            : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} />)}
           {activeView === "analytics" && <AnalyticsView tasks={tasks} />}
         </div>
       </main>
@@ -807,7 +834,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             <label className="field-label">Task name<input autoFocus value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="What needs to move forward?" required /></label>
             <div className="form-grid">
               <label className="field-label">Project<select value={draft.project} onChange={(event) => setDraft({ ...draft, project: event.target.value })}>{projects.map((project) => <option key={project.id}>{project.name}</option>)}</select></label>
-              <label className="field-label">Priority<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Priority })}><option>High</option><option>Medium</option><option>Low</option></select></label>
+              <label className="field-label">Priority<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Priority })}><option>Very High</option><option>High</option><option>Medium</option><option>Low</option></select></label>
               <label className="field-label">Due<select value={draft.due} onChange={(event) => setDraft({ ...draft, due: event.target.value })}><option>Today</option><option>Tomorrow</option><option>Friday</option><option>Monday</option><option>Someday</option></select></label>
               <label className="field-label">Time<input value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label>
               <label className="field-label">Estimate<select value={draft.duration} onChange={(event) => setDraft({ ...draft, duration: Number(event.target.value) })}><option value={15}>15 minutes</option><option value={30}>30 minutes</option><option value={45}>45 minutes</option><option value={60}>1 hour</option><option value={90}>1.5 hours</option><option value={120}>2 hours</option></select></label>
@@ -858,6 +885,17 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         </div>
       )}
 
+      {deletingProject && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setDeletingProject(null)}>
+          <section className="task-modal project-delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
+            <div className="modal-header"><div><p className="eyebrow">Permanent action</p><h2 id="delete-project-title">Delete project?</h2></div><button className="icon-button" type="button" onClick={() => setDeletingProject(null)} aria-label="Close"><X size={20} /></button></div>
+            <div className="project-delete-warning"><span><Trash2 size={21} /></span><div><strong>{deletingProject.name}</strong><p>This will delete the project and all {tasks.filter((task) => task.project === deletingProject.name).length} tasks inside it, including completed tasks.</p></div></div>
+            <p className="project-delete-note">This action cannot be undone from the app.</p>
+            <div className="modal-actions"><span /><button className="secondary-button" type="button" onClick={() => setDeletingProject(null)}>Cancel</button><button className="danger-confirm-button" type="button" onClick={deleteProject}><Trash2 size={16} /> Delete project</button></div>
+          </section>
+        </div>
+      )}
+
       {focusPickerOpen && (
         <div className="modal-backdrop focus-picker-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setFocusPickerOpen(false)}>
           <section className="focus-picker" role="dialog" aria-modal="true" aria-labelledby="focus-picker-title">
@@ -873,7 +911,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
                     <button className={selected ? "focus-task-option selected" : "focus-task-option"} type="button" key={task.id} onClick={() => setFocusTask(task)} aria-pressed={selected}>
                       <span className="focus-task-select">{selected ? <Check size={15} /> : <span />}</span>
                       <span className="focus-task-copy"><strong>{task.title}</strong><small>{task.project} · {task.due} at {task.time}</small></span>
-                      <span className={`priority-label ${task.priority.toLowerCase()}`}>{task.priority}</span>
+                      <span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span>
                       <span className="focus-task-duration"><Clock3 size={14} />{formatDuration(task.duration)}</span>
                     </button>
                   );
@@ -945,6 +983,7 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, result
           <span>Priority</span>
           <select value={priority} onChange={(event) => onPriorityChange(event.target.value as "All" | Priority)}>
             <option value="All">All priorities</option>
+            <option value="Very High">Very High</option>
             <option value="High">High</option>
             <option value="Medium">Medium</option>
             <option value="Low">Low</option>
@@ -1058,7 +1097,7 @@ function BoardView({ tasks, onMove, onToggle, onEdit }: { tasks: Task[]; onMove:
             <div className="board-list">
               {columnTasks.map((task) => (
                 <article className="board-task" key={task.id} draggable onDragStart={(event) => event.dataTransfer.setData("task-id", String(task.id))}>
-                  <div><span className={`priority-label ${task.priority.toLowerCase()}`}>{task.priority}</span><button onClick={() => onEdit(task)}><MoreHorizontal size={18} /></button></div>
+                  <div><span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span><button onClick={() => onEdit(task)}><MoreHorizontal size={18} /></button></div>
                   <h3 onClick={() => onEdit(task)}>{task.title}</h3>
                   <p>{task.notes}</p>
                   <div className="board-task-footer"><span><Folder size={14} />{task.project}</span><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)}>{task.completed && <Check size={13} />}</button></div>
@@ -1087,10 +1126,10 @@ function ListView({ tasks, projects, title, onToggle, onEdit, empty = "No tasks 
 }
 
 function TaskRow({ task, projects, onToggle, onEdit }: { task: Task; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void }) {
-  return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={`Toggle ${task.title}`}>{task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}</h3><div><span><span className="project-dot" style={{ background: projects.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.due}</span><span><Clock3 size={13} />{task.time}</span></div></div><span className={`priority-label ${task.priority.toLowerCase()}`}>{task.priority}</span><button className="icon-button" onClick={() => onEdit(task)} aria-label="Edit task"><MoreHorizontal size={18} /></button></article>;
+  return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={`Toggle ${task.title}`}>{task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}</h3><div><span><span className="project-dot" style={{ background: projects.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.due}</span><span><Clock3 size={13} />{task.time}</span></div></div><span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span><button className="icon-button" onClick={() => onEdit(task)} aria-label="Edit task"><MoreHorizontal size={18} /></button></article>;
 }
 
-function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenameProject }: { tasks: Task[]; projects: Project[]; onCreateProject: () => void; onOpenProject: (project: Project) => void; onRenameProject: (project: Project) => void }) {
+function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenameProject, onDeleteProject }: { tasks: Task[]; projects: Project[]; onCreateProject: () => void; onOpenProject: (project: Project) => void; onRenameProject: (project: Project) => void; onDeleteProject: (project: Project) => void }) {
   const [layout, setLayout] = useState<"list" | "grid">("list");
   const projectStats = projects.map((project) => {
     const projectTasks = tasks.filter((task) => task.project === project.name);
@@ -1123,7 +1162,7 @@ function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenam
         <section className="project-list" aria-label="Projects list">
           {projectStats.map((project) => (
             <article className="project-list-row" key={project.id}>
-              <button className="project-list-main" onClick={() => onOpenProject(project)}>
+              <button className="project-list-main" type="button" onClick={() => onOpenProject(project)}>
                 <span className="project-list-icon" style={{ background: `${project.color}18`, color: project.color }}><Folder size={20} /></span>
                 <span className="project-list-copy"><strong>{project.name}</strong><small>{project.description}</small></span>
               </button>
@@ -1135,7 +1174,7 @@ function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenam
                 <div><span>Progress</span><strong>{project.percent}%</strong></div>
                 <i><span style={{ width: `${project.percent}%`, background: project.color }} /></i>
               </div>
-              <div className="project-list-actions"><button className="project-list-edit" onClick={() => onRenameProject(project)} aria-label={`Rename ${project.name}`}><Pencil size={16} /></button><button className="project-list-open" onClick={() => onOpenProject(project)} aria-label={`Open ${project.name}`}><ArrowRight size={17} /></button></div>
+              <div className="project-list-actions"><button className="project-list-delete" type="button" onClick={() => onDeleteProject(project)} aria-label={`Delete ${project.name}`}><Trash2 size={16} /></button><button className="project-list-edit" type="button" onClick={() => onRenameProject(project)} aria-label={`Rename ${project.name}`}><Pencil size={16} /></button><button className="project-list-open" type="button" onClick={() => onOpenProject(project)} aria-label={`Open ${project.name}`}><ArrowRight size={17} /></button></div>
             </article>
           ))}
         </section>
@@ -1143,12 +1182,12 @@ function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenam
         <section className="project-grid">
           {projectStats.map((project, index) => (
             <article className={`project-card project-${index + 1}`} key={project.id}>
-              <div className="project-card-top"><span className="project-symbol"><Folder size={21} /></span><button onClick={() => onRenameProject(project)} aria-label={`Rename ${project.name}`}><Pencil size={18} /></button></div>
+              <div className="project-card-top"><span className="project-symbol"><Folder size={21} /></span><div className="project-card-actions"><button className="project-card-delete" type="button" onClick={() => onDeleteProject(project)} aria-label={`Delete ${project.name}`}><Trash2 size={17} /></button><button type="button" onClick={() => onRenameProject(project)} aria-label={`Rename ${project.name}`}><Pencil size={18} /></button></div></div>
               <p className="eyebrow">{project.taskCount} tasks</p>
               <h2>{project.name}</h2>
               <p>{project.description}</p>
               <div className="project-progress"><div><span>Progress</span><strong>{project.percent}%</strong></div><i><span style={{ width: `${project.percent}%`, background: project.color }} /></i></div>
-              <button className="project-open" onClick={() => onOpenProject(project)}>Open project <ArrowRight size={16} /></button>
+              <button className="project-open" type="button" onClick={() => onOpenProject(project)}>Open project <ArrowRight size={16} /></button>
             </article>
           ))}
         </section>
