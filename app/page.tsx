@@ -42,9 +42,11 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { filterTasks } from "@/lib/task-filters";
 
 type Priority = "High" | "Medium" | "Low";
 type TaskStatus = "todo" | "in-progress" | "done";
+type StatusFilter = "All" | TaskStatus;
 export type View = "today" | "inbox" | "upcoming" | "board" | "projects" | "analytics" | "completed";
 
 type Task = {
@@ -199,6 +201,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [activeProjectId, setActiveProjectId] = useState<string | null>(initialProjectId);
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<"All" | Priority>("All");
+  const [projectFilter, setProjectFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
+  const [dueFilter, setDueFilter] = useState("All");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -411,18 +416,15 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   }, [projects, tasks]);
 
   const visibleTasks = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return tasks.filter((task) => {
-      const matchesSearch = !query || `${task.title} ${task.project} ${task.notes}`.toLowerCase().includes(query);
-      const matchesPriority = priorityFilter === "All" || task.priority === priorityFilter;
-      return matchesSearch && matchesPriority;
-    });
-  }, [tasks, search, priorityFilter]);
+    return filterTasks(tasks, { search, priority: priorityFilter, project: projectFilter, status: statusFilter, due: dueFilter });
+  }, [dueFilter, priorityFilter, projectFilter, search, statusFilter, tasks]);
 
   const openTasks = tasks.filter((task) => !task.completed);
   const completedCount = tasks.filter((task) => task.completed).length;
-  const progress = tasks.length ? Math.round((completedCount / tasks.length) * 100) : 0;
-  const priorities = openTasks.filter((task) => task.priority === "High");
+  const filteredOpenTasks = visibleTasks.filter((task) => !task.completed);
+  const filteredCompletedCount = visibleTasks.filter((task) => task.completed).length;
+  const filteredProgress = visibleTasks.length ? Math.round((filteredCompletedCount / visibleTasks.length) * 100) : 0;
+  const priorities = filteredOpenTasks.filter((task) => task.priority === "High");
   const activeProject = projects.find((project) => project.id === activeProjectId) ?? null;
   const firstSidebarProjects = projects.slice(0, 4);
   const sidebarProjects = activeProject && !firstSidebarProjects.some((project) => project.id === activeProject.id)
@@ -433,6 +435,30 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     : activeView === "today"
       ? { ...VIEW_TITLES.today, title: `Good morning, ${sessionUser?.displayName.split(" ")[0] ?? "there"}` }
       : VIEW_TITLES[activeView];
+  const taskFiltersVisible = activeView !== "analytics" && (activeView !== "projects" || Boolean(activeProject));
+  const activeFilterCount = [search.trim(), priorityFilter !== "All", projectFilter !== "All", statusFilter !== "All", dueFilter !== "All"].filter(Boolean).length;
+  const viewTaskCount = activeProject
+    ? visibleTasks.filter((task) => task.project === activeProject.name).length
+    : activeView === "inbox" || activeView === "upcoming"
+        ? visibleTasks.filter((task) => !task.completed).length
+        : activeView === "completed"
+          ? visibleTasks.filter((task) => task.completed).length
+          : visibleTasks.length;
+  const totalViewTaskCount = activeProject
+    ? tasks.filter((task) => task.project === activeProject.name).length
+    : activeView === "inbox" || activeView === "upcoming"
+        ? tasks.filter((task) => !task.completed).length
+        : activeView === "completed"
+          ? tasks.filter((task) => task.completed).length
+          : tasks.length;
+
+  function clearTaskFilters() {
+    setSearch("");
+    setPriorityFilter("All");
+    setProjectFilter("All");
+    setStatusFilter("All");
+    setDueFilter("All");
+  }
 
   function navigate(view: View) {
     setActiveView(view);
@@ -444,6 +470,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   function navigateProject(project: Project) {
     setActiveView("projects");
     setActiveProjectId(project.id);
+    setProjectFilter("All");
     setMobileMenuOpen(false);
     router.push(`/projects/${project.id}`);
   }
@@ -515,6 +542,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     const previousName = editingProject.name;
     setProjects((current) => current.map((project) => project.id === editingProject.id ? { ...project, name: nextName } : project));
     setTasks((current) => current.map((task) => task.project === previousName ? { ...task, project: nextName } : task));
+    setProjectFilter((current) => current === previousName ? nextName : current);
     setDraft((current) => current.project === previousName ? { ...current, project: nextName } : current);
     setEditingProject(null);
     setToast(`Project renamed to ${nextName}`);
@@ -695,13 +723,33 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             </div>
           </section>
 
+          {taskFiltersVisible && (
+            <TaskFilterBar
+              tasks={tasks}
+              projects={projects}
+              priority={priorityFilter}
+              project={projectFilter}
+              status={statusFilter}
+              due={dueFilter}
+              resultCount={viewTaskCount}
+              totalCount={totalViewTaskCount}
+              activeCount={activeFilterCount}
+              showProjectFilter={!activeProject}
+              onPriorityChange={setPriorityFilter}
+              onProjectChange={setProjectFilter}
+              onStatusChange={setStatusFilter}
+              onDueChange={setDueFilter}
+              onClear={clearTaskFilters}
+            />
+          )}
+
           {activeView === "today" && (
             <TodayView
               tasks={visibleTasks}
-              openTasks={openTasks}
+              openTasks={filteredOpenTasks}
               priorities={priorities}
-              progress={progress}
-              completedCount={completedCount}
+              progress={filteredProgress}
+              completedCount={filteredCompletedCount}
               onAdd={openNewTask}
               onToggle={toggleTask}
               onEdit={openEditTask}
@@ -720,7 +768,6 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       </main>
 
       <div className="floating-controls">
-        <div className="filter-select"><ListFilter size={15} /><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value as "All" | Priority)} aria-label="Filter by priority"><option>All</option><option>High</option><option>Medium</option><option>Low</option></select></div>
         <button className="mobile-add" onClick={openNewTask} aria-label="Add task"><Plus size={22} /></button>
       </div>
 
@@ -838,6 +885,73 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   );
 }
 
+function TaskFilterBar({ tasks, projects, priority, project, status, due, resultCount, totalCount, activeCount, showProjectFilter, onPriorityChange, onProjectChange, onStatusChange, onDueChange, onClear }: {
+  tasks: Task[];
+  projects: Project[];
+  priority: "All" | Priority;
+  project: string;
+  status: StatusFilter;
+  due: string;
+  resultCount: number;
+  totalCount: number;
+  activeCount: number;
+  showProjectFilter: boolean;
+  onPriorityChange: (value: "All" | Priority) => void;
+  onProjectChange: (value: string) => void;
+  onStatusChange: (value: StatusFilter) => void;
+  onDueChange: (value: string) => void;
+  onClear: () => void;
+}) {
+  const dueOptions = Array.from(new Set(tasks.map((task) => task.due)));
+
+  return (
+    <section className="task-filter-bar" aria-label="Task filters">
+      <div className="task-filter-summary">
+        <span className="task-filter-icon"><ListFilter size={17} /></span>
+        <div><strong>Filter tasks</strong><small>{resultCount} of {totalCount} matching</small></div>
+        {activeCount > 0 && <em aria-label={`${activeCount} active filters`}>{activeCount}</em>}
+      </div>
+      <div className="task-filter-fields">
+        <label className="task-filter-control">
+          <span>Priority</span>
+          <select value={priority} onChange={(event) => onPriorityChange(event.target.value as "All" | Priority)}>
+            <option value="All">All priorities</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+          </select>
+        </label>
+        {showProjectFilter && (
+          <label className="task-filter-control">
+            <span>Project</span>
+            <select value={project} onChange={(event) => onProjectChange(event.target.value)}>
+              <option value="All">All projects</option>
+              {projects.map((item) => <option value={item.name} key={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+        )}
+        <label className="task-filter-control">
+          <span>Status</span>
+          <select value={status} onChange={(event) => onStatusChange(event.target.value as StatusFilter)}>
+            <option value="All">All statuses</option>
+            <option value="todo">To do</option>
+            <option value="in-progress">In progress</option>
+            <option value="done">Completed</option>
+          </select>
+        </label>
+        <label className="task-filter-control">
+          <span>Due</span>
+          <select value={due} onChange={(event) => onDueChange(event.target.value)}>
+            <option value="All">Any date</option>
+            {dueOptions.map((item) => <option value={item} key={item}>{item}</option>)}
+          </select>
+        </label>
+      </div>
+      <button className="clear-task-filters" type="button" onClick={onClear} disabled={activeCount === 0}><RotateCcw size={15} /> Clear</button>
+    </section>
+  );
+}
+
 function TodayView({ tasks, openTasks, priorities, progress, completedCount, onAdd, onToggle, onEdit, onFocus }: { tasks: Task[]; openTasks: Task[]; priorities: Task[]; progress: number; completedCount: number; onAdd: () => void; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
   const featured = tasks.filter((task) => !task.completed && task.due === "Today").slice(0, 3);
   const planRef = useRef<HTMLDivElement>(null);
@@ -940,7 +1054,7 @@ function UpcomingView({ tasks, projects, onToggle, onEdit }: { tasks: Task[]; pr
 }
 
 function ListView({ tasks, projects, title, onToggle, onEdit, empty = "No tasks match this view." }: { tasks: Task[]; projects: Project[]; title: string; onToggle: (id: number) => void; onEdit: (task: Task) => void; empty?: string }) {
-  return <section className="list-card"><div className="list-card-header"><div><p className="eyebrow">{tasks.length} tasks</p><h2>{title}</h2></div><button className="secondary-button"><ListFilter size={16} /> Filter</button></div>{tasks.length ? <div className="task-list">{tasks.map((task) => <TaskRow key={task.id} task={task} projects={projects} onToggle={onToggle} onEdit={onEdit} />)}</div> : <div className="empty-list"><CheckCircle2 size={32} /><h3>All clear</h3><p>{empty}</p></div>}</section>;
+  return <section className="list-card"><div className="list-card-header"><div><p className="eyebrow">{tasks.length} tasks</p><h2>{title}</h2></div></div>{tasks.length ? <div className="task-list">{tasks.map((task) => <TaskRow key={task.id} task={task} projects={projects} onToggle={onToggle} onEdit={onEdit} />)}</div> : <div className="empty-list"><CheckCircle2 size={32} /><h3>All clear</h3><p>{empty}</p></div>}</section>;
 }
 
 function TaskRow({ task, projects, onToggle, onEdit }: { task: Task; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void }) {
