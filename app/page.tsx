@@ -43,6 +43,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { filterTasks } from "@/lib/task-filters";
+import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-recovery";
 
 type Priority = "High" | "Medium" | "Low";
 type TaskStatus = "todo" | "in-progress" | "done";
@@ -254,7 +255,11 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       const projectKey = accountStorageKey("projects", user.id);
       let cachedTasks: Task[] | null = null;
       let cachedProjects: Project[] | null = null;
+      let legacyTasksBackup: Task[] = [];
+      let legacyProjectsBackup: Project[] = [];
+      let legacyRecoveryComplete = false;
       let hasCachedWorkspace = false;
+      const recoveryKey = `orbit-legacy-recovery-v1:${user.id}`;
 
       try {
         const legacyTasks = user.id === "aj-miller" ? window.localStorage.getItem("orbit-tasks-v1") : null;
@@ -266,10 +271,19 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           const parsedTasks = JSON.parse(storedTasks);
           if (Array.isArray(parsedTasks)) cachedTasks = parsedTasks;
         }
+        if (legacyTasks) {
+          const parsedLegacyTasks = JSON.parse(legacyTasks);
+          if (Array.isArray(parsedLegacyTasks)) legacyTasksBackup = parsedLegacyTasks;
+        }
         if (storedProjects) {
           const parsedProjects = JSON.parse(storedProjects);
           if (Array.isArray(parsedProjects)) cachedProjects = parsedProjects;
         }
+        if (legacyProjects) {
+          const parsedLegacyProjects = JSON.parse(legacyProjects);
+          if (Array.isArray(parsedLegacyProjects)) legacyProjectsBackup = parsedLegacyProjects;
+        }
+        legacyRecoveryComplete = window.localStorage.getItem(recoveryKey) === "complete";
         if (!window.localStorage.getItem(taskKey) && legacyTasks) window.localStorage.setItem(taskKey, legacyTasks);
         if (!window.localStorage.getItem(projectKey) && legacyProjects) window.localStorage.setItem(projectKey, legacyProjects);
       } catch {
@@ -279,6 +293,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       let nextTasks = cachedTasks ?? INITIAL_TASKS;
       let nextProjects = cachedProjects ?? INITIAL_PROJECTS;
       let status: SyncStatus = "offline";
+      let recoveredLegacyWorkspace = false;
 
       try {
         const response = await fetch("/api/workspace", { cache: "no-store" });
@@ -290,6 +305,17 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         } else if (hasCachedWorkspace) {
           await saveWorkspace(nextTasks, nextProjects);
         }
+
+        if (!legacyRecoveryComplete && user.id === "aj-miller" && (legacyTasksBackup.length || legacyProjectsBackup.length)) {
+          const recoveredTasks = mergeRecoveredTasks(nextTasks, legacyTasksBackup);
+          const recoveredProjects = mergeRecoveredProjects(nextProjects, legacyProjectsBackup);
+          recoveredLegacyWorkspace = JSON.stringify(recoveredTasks) !== JSON.stringify(nextTasks)
+            || JSON.stringify(recoveredProjects) !== JSON.stringify(nextProjects);
+          nextTasks = recoveredTasks;
+          nextProjects = recoveredProjects;
+          if (recoveredLegacyWorkspace) await saveWorkspace(nextTasks, nextProjects);
+          window.localStorage.setItem(recoveryKey, "complete");
+        }
         status = "synced";
       } catch {
         status = "offline";
@@ -298,6 +324,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       if (!active) return;
       setTasks(nextTasks);
       setProjects(nextProjects);
+      if (recoveredLegacyWorkspace) {
+        setToast("Recovered your earlier local tasks and projects, including completion status.");
+      }
       setFocusTask((current) => nextTasks.find((task) => task.id === current?.id && !task.completed) ?? nextTasks.find((task) => !task.completed) ?? null);
       lastSyncedPayload.current = status === "synced" ? JSON.stringify({ tasks: nextTasks, projects: nextProjects }) : "";
       try {

@@ -42,6 +42,23 @@ export async function getOrbitWorkspace(userId: string): Promise<OrbitWorkspace 
 
 export async function saveOrbitWorkspace(userId: string, tasks: unknown[], projects: unknown[]): Promise<OrbitWorkspace> {
   const sql = database();
+  await sql`
+    CREATE TABLE IF NOT EXISTS orbit_workspace_history (
+      id bigserial PRIMARY KEY,
+      user_id text NOT NULL,
+      tasks jsonb NOT NULL,
+      projects jsonb NOT NULL,
+      revision bigint NOT NULL,
+      workspace_updated_at timestamptz NOT NULL,
+      archived_at timestamptz NOT NULL DEFAULT now()
+    )
+  `;
+  await sql`
+    INSERT INTO orbit_workspace_history (user_id, tasks, projects, revision, workspace_updated_at)
+    SELECT user_id, tasks, projects, revision, updated_at
+    FROM orbit_workspaces
+    WHERE user_id = ${userId}
+  `;
   const rows = await sql`
     INSERT INTO orbit_workspaces (user_id, tasks, projects)
     VALUES (${userId}, ${JSON.stringify(tasks)}::jsonb, ${JSON.stringify(projects)}::jsonb)
