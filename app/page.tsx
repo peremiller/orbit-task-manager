@@ -171,6 +171,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [projectNameDraft, setProjectNameDraft] = useState("");
   const [draft, setDraft] = useState(emptyDraft);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [focusPickerOpen, setFocusPickerOpen] = useState(false);
   const [focusOpen, setFocusOpen] = useState(false);
   const [focusTask, setFocusTask] = useState<Task | null>(INITIAL_TASKS[0]);
   const [secondsLeft, setSecondsLeft] = useState(25 * 60);
@@ -246,10 +247,10 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         setTaskModalOpen(true);
       }
       if (event.key.toLowerCase() === "f") {
-        setFocusTask(tasks.find((task) => !task.completed) ?? null);
-        setSecondsLeft(25 * 60);
+        setFocusTask((current) => current && !current.completed ? current : tasks.find((task) => !task.completed) ?? null);
         setTimerRunning(false);
-        setFocusOpen(true);
+        setFocusOpen(false);
+        setFocusPickerOpen(true);
       }
       if (event.key === "/") {
         event.preventDefault();
@@ -261,7 +262,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         setProjectModalOpen(false);
         setProjectCreateError("");
         setEditingProject(null);
+        setFocusPickerOpen(false);
         setFocusOpen(false);
+        setTimerRunning(false);
         setMobileMenuOpen(false);
       }
     }
@@ -428,10 +431,24 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   }
 
   function openFocus(task: Task | null) {
-    setFocusTask(task ?? openTasks[0] ?? null);
+    const nextTask = task ?? openTasks[0] ?? null;
+    if (!nextTask) {
+      setFocusTask(null);
+      setFocusPickerOpen(true);
+      return;
+    }
+    setFocusTask(nextTask);
     setSecondsLeft(25 * 60);
     setTimerRunning(false);
+    setFocusPickerOpen(false);
     setFocusOpen(true);
+  }
+
+  function openFocusPicker() {
+    setFocusTask((current) => current && !current.completed ? current : openTasks[0] ?? null);
+    setTimerRunning(false);
+    setFocusOpen(false);
+    setFocusPickerOpen(true);
   }
 
   const navItems: { view: View; label: string; icon: typeof LayoutDashboard; count?: number }[] = [
@@ -532,7 +549,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             </div>
             <div className="heading-actions">
               <button className="secondary-button" onClick={() => setShowSearch(true)}><Search size={17} /> Search</button>
-              <button className="focus-button" onClick={() => openFocus(openTasks[0] ?? null)}><Zap size={17} fill="currentColor" /> Start focus <kbd>F</kbd></button>
+              <button className="focus-button" onClick={openFocusPicker}><Zap size={17} fill="currentColor" /> Start focus <kbd>F</kbd></button>
             </div>
           </section>
 
@@ -623,15 +640,48 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         </div>
       )}
 
+      {focusPickerOpen && (
+        <div className="modal-backdrop focus-picker-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setFocusPickerOpen(false)}>
+          <section className="focus-picker" role="dialog" aria-modal="true" aria-labelledby="focus-picker-title">
+            <div className="modal-header">
+              <div><p className="eyebrow">Protect your attention</p><h2 id="focus-picker-title">Choose a task to focus on</h2></div>
+              <button className="icon-button" type="button" onClick={() => setFocusPickerOpen(false)} aria-label="Close task picker"><X size={20} /></button>
+            </div>
+            {openTasks.length ? (
+              <div className="focus-task-list" aria-label="Incomplete tasks">
+                {openTasks.map((task) => {
+                  const selected = focusTask?.id === task.id;
+                  return (
+                    <button className={selected ? "focus-task-option selected" : "focus-task-option"} type="button" key={task.id} onClick={() => setFocusTask(task)} aria-pressed={selected}>
+                      <span className="focus-task-select">{selected ? <Check size={15} /> : <span />}</span>
+                      <span className="focus-task-copy"><strong>{task.title}</strong><small>{task.project} · {task.due} at {task.time}</small></span>
+                      <span className={`priority-label ${task.priority.toLowerCase()}`}>{task.priority}</span>
+                      <span className="focus-task-duration"><Clock3 size={14} />{formatDuration(task.duration)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="focus-picker-empty"><CheckCircle2 size={28} /><strong>Your task list is clear</strong><p>Add a task when you are ready for another focused session.</p></div>
+            )}
+            <div className="focus-picker-actions">
+              <button className="secondary-button" type="button" onClick={() => setFocusPickerOpen(false)}>Cancel</button>
+              <button className="primary-button" type="button" disabled={!focusTask} onClick={() => openFocus(focusTask)}>Start 25 min <ArrowRight size={17} /></button>
+            </div>
+          </section>
+        </div>
+      )}
+
       {focusOpen && (
-        <div className="modal-backdrop focus-backdrop">
-          <section className="focus-modal" aria-label="Focus timer">
+        <div className="modal-backdrop focus-backdrop" role="presentation">
+          <section className="focus-modal" role="dialog" aria-modal="true" aria-label="Focus timer">
             <button className="icon-button focus-close" onClick={() => { setFocusOpen(false); setTimerRunning(false); }} aria-label="Close focus timer"><X size={20} /></button>
             <div className="focus-orbit"><span /><i /><b /></div>
             <p className="eyebrow">Deep work session</p>
             <h2>{focusTask?.title ?? "Choose one meaningful task"}</h2>
             <div className="timer-display">{timeLabel(secondsLeft)}</div>
             <p className="focus-copy">One task. No noise. You have everything you need.</p>
+            <button className="focus-change" type="button" onClick={openFocusPicker}>Choose a different task</button>
             <div className="timer-actions">
               <button className="timer-reset" onClick={() => { setSecondsLeft(25 * 60); setTimerRunning(false); }} aria-label="Reset timer"><RotateCcw size={19} /></button>
               <button className="timer-play" onClick={() => setTimerRunning((value) => !value)}>{timerRunning ? <Pause size={25} fill="currentColor" /> : <Play size={25} fill="currentColor" />}<span>{timerRunning ? "Pause" : "Begin focus"}</span></button>
@@ -648,6 +698,13 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
 function TodayView({ tasks, openTasks, priorities, progress, completedCount, onAdd, onToggle, onEdit, onFocus }: { tasks: Task[]; openTasks: Task[]; priorities: Task[]; progress: number; completedCount: number; onAdd: () => void; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
   const featured = tasks.filter((task) => !task.completed && task.due === "Today").slice(0, 3);
+  const planRef = useRef<HTMLDivElement>(null);
+
+  function viewPlan() {
+    planRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    planRef.current?.focus({ preventScroll: true });
+  }
+
   return (
     <div className="view-stack">
       <section className="summary-row">
@@ -657,14 +714,14 @@ function TodayView({ tasks, openTasks, priorities, progress, completedCount, onA
         <button className="quick-add" onClick={onAdd}><Plus size={21} /> Add task</button>
       </section>
 
-      <div className="section-heading"><div><p className="eyebrow">Your next best moves</p><h2>Today&apos;s priorities</h2></div><button className="text-button">View plan <ArrowRight size={15} /></button></div>
+      <div className="section-heading"><div><p className="eyebrow">Your next best moves</p><h2>Today&apos;s priorities</h2></div><button className="text-button" type="button" onClick={viewPlan}>View plan <ArrowRight size={15} /></button></div>
 
       <section className="priority-grid">
         {featured.length ? featured.map((task, index) => <PriorityCard key={task.id} task={task} index={index} onToggle={onToggle} onEdit={onEdit} onFocus={onFocus} />) : <EmptyState onAdd={onAdd} />}
       </section>
 
       <section className="lower-grid">
-        <div className="schedule-card">
+        <div className="schedule-card" id="today-plan" ref={planRef} tabIndex={-1}>
           <div className="card-title-row"><div><p className="eyebrow">Time map</p><h3>Today&apos;s schedule</h3></div><button className="icon-button"><Ellipsis size={19} /></button></div>
           <div className="timeline-hours">{["9 AM", "10 AM", "11 AM", "12 PM", "1 PM", "2 PM", "3 PM", "4 PM"].map((hour) => <span key={hour}>{hour}</span>)}</div>
           <div className="timeline-track"><span className="block blue-block" /><span className="block lime-block" /><span className="block violet-block" /></div>
