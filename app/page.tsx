@@ -15,6 +15,7 @@ import {
   Inbox,
   KanbanSquare,
   LayoutDashboard,
+  LayoutGrid,
   ListFilter,
   Menu,
   Moon,
@@ -23,6 +24,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  Rows3,
   Search,
   Settings,
   Sparkles,
@@ -71,6 +73,14 @@ const PROJECTS = [
   { name: "Quality systems", color: "#ff8a34" },
   { name: "Stakeholder comms", color: "#13a57a" },
   { name: "Team operations", color: "#e74b71" },
+];
+
+const PROJECT_DESCRIPTIONS = [
+  "Coordinate every detail for a confident release.",
+  "Upgrade safely, without surprises.",
+  "Build quality into every step.",
+  "Keep decisions visible and moving.",
+  "Make teamwork feel effortless.",
 ];
 
 const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: string }> = {
@@ -569,7 +579,68 @@ function TaskRow({ task, onToggle, onEdit }: { task: Task; onToggle: (id: number
 }
 
 function ProjectsView({ tasks, onOpenProject }: { tasks: Task[]; onOpenProject: (project: string) => void }) {
-  return <section className="project-grid">{PROJECTS.map((project, index) => { const projectTasks = tasks.filter((task) => task.project === project.name); const done = projectTasks.filter((task) => task.completed).length; const percent = projectTasks.length ? Math.round(done / projectTasks.length * 100) : 0; return <article className={`project-card project-${index + 1}`} key={project.name}><div className="project-card-top"><span className="project-symbol"><Folder size={21} /></span><button aria-label={`More options for ${project.name}`}><MoreHorizontal size={18} /></button></div><p className="eyebrow">{projectTasks.length} tasks</p><h2>{project.name}</h2><p>{["Coordinate every detail for a confident release.", "Upgrade safely, without surprises.", "Build quality into every step.", "Keep decisions visible and moving.", "Make teamwork feel effortless."][index]}</p><div className="project-progress"><div><span>Progress</span><strong>{percent}%</strong></div><i><span style={{ width: `${percent}%`, background: project.color }} /></i></div><button className="project-open" onClick={() => onOpenProject(project.name)}>Open project <ArrowRight size={16} /></button></article>; })}</section>;
+  const [layout, setLayout] = useState<"list" | "grid">("list");
+  const projectStats = PROJECTS.map((project, index) => {
+    const projectTasks = tasks.filter((task) => task.project === project.name);
+    const completed = projectTasks.filter((task) => task.completed).length;
+    return {
+      ...project,
+      description: PROJECT_DESCRIPTIONS[index],
+      taskCount: projectTasks.length,
+      openCount: projectTasks.length - completed,
+      percent: projectTasks.length ? Math.round((completed / projectTasks.length) * 100) : 0,
+    };
+  });
+
+  return (
+    <div className="projects-view">
+      <div className="projects-toolbar">
+        <div>
+          <p className="eyebrow">Portfolio overview</p>
+          <h2>{PROJECTS.length} active projects</h2>
+        </div>
+        <div className="project-view-switch" role="group" aria-label="Project layout">
+          <button className={layout === "list" ? "active" : ""} onClick={() => setLayout("list")} aria-pressed={layout === "list"}><Rows3 size={16} /> List</button>
+          <button className={layout === "grid" ? "active" : ""} onClick={() => setLayout("grid")} aria-pressed={layout === "grid"}><LayoutGrid size={16} /> Grid</button>
+        </div>
+      </div>
+
+      {layout === "list" ? (
+        <section className="project-list" aria-label="Projects list">
+          {projectStats.map((project) => (
+            <article className="project-list-row" key={project.name}>
+              <button className="project-list-main" onClick={() => onOpenProject(project.name)}>
+                <span className="project-list-icon" style={{ background: `${project.color}18`, color: project.color }}><Folder size={20} /></span>
+                <span className="project-list-copy"><strong>{project.name}</strong><small>{project.description}</small></span>
+              </button>
+              <div className="project-list-metrics">
+                <span><strong>{project.openCount}</strong><small>Open</small></span>
+                <span><strong>{project.taskCount}</strong><small>Total</small></span>
+              </div>
+              <div className="project-list-progress">
+                <div><span>Progress</span><strong>{project.percent}%</strong></div>
+                <i><span style={{ width: `${project.percent}%`, background: project.color }} /></i>
+              </div>
+              <button className="project-list-open" onClick={() => onOpenProject(project.name)} aria-label={`Open ${project.name}`}><ArrowRight size={17} /></button>
+            </article>
+          ))}
+        </section>
+      ) : (
+        <section className="project-grid">
+          {projectStats.map((project, index) => (
+            <article className={`project-card project-${index + 1}`} key={project.name}>
+              <div className="project-card-top"><span className="project-symbol"><Folder size={21} /></span><button aria-label={`More options for ${project.name}`}><MoreHorizontal size={18} /></button></div>
+              <p className="eyebrow">{project.taskCount} tasks</p>
+              <h2>{project.name}</h2>
+              <p>{project.description}</p>
+              <div className="project-progress"><div><span>Progress</span><strong>{project.percent}%</strong></div><i><span style={{ width: `${project.percent}%`, background: project.color }} /></i></div>
+              <button className="project-open" onClick={() => onOpenProject(project.name)}>Open project <ArrowRight size={16} /></button>
+            </article>
+          ))}
+        </section>
+      )}
+    </div>
+  );
 }
 
 function AnalyticsView({ tasks }: { tasks: Task[] }) {
