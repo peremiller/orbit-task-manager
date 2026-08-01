@@ -109,7 +109,7 @@ const INITIAL_PROJECTS: Project[] = [
 const PROJECT_COLORS = ["#2457ff", "#8f5dff", "#ff8a34", "#13a57a", "#e74b71", "#0891b2", "#ca8a04", "#7c3aed"];
 
 const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: string }> = {
-  today: { eyebrow: "Saturday, August 1", title: "Good morning, AJ", description: "Protect your attention. Move the work that matters." },
+  today: { eyebrow: "", title: "Good morning, AJ", description: "Protect your attention. Move the work that matters." },
   inbox: { eyebrow: "Capture first, organize later", title: "Inbox", description: "Loose ends and new ideas, ready to be clarified." },
   upcoming: { eyebrow: "The week ahead", title: "Upcoming", description: "A calm view of what is coming and when." },
   board: { eyebrow: "Flow of work", title: "Board", description: "Move tasks from intention to done." },
@@ -227,11 +227,26 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [toast, setToast] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [localDateLabel, setLocalDateLabel] = useState("");
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("loading");
   const hydrated = useRef(false);
   const lastSyncedPayload = useRef("");
+
+  useEffect(() => {
+    function updateLocalDate() {
+      setLocalDateLabel(new Intl.DateTimeFormat(undefined, {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+      }).format(new Date()));
+    }
+
+    updateLocalDate();
+    const timer = window.setInterval(updateLocalDate, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -464,7 +479,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const heading = activeProject
     ? { eyebrow: "Project workspace", title: activeProject.name, description: "Keep every task, decision, and next move in one clear orbit." }
     : activeView === "today"
-      ? { ...VIEW_TITLES.today, title: `Good morning, ${sessionUser?.displayName.split(" ")[0] ?? "there"}` }
+      ? { ...VIEW_TITLES.today, eyebrow: localDateLabel, title: `Good morning, ${sessionUser?.displayName.split(" ")[0] ?? "there"}` }
       : VIEW_TITLES[activeView];
   const taskFiltersVisible = activeView !== "analytics" && (activeView !== "projects" || Boolean(activeProject));
   const activeFilterCount = [search.trim(), priorityFilter !== "All", projectFilter !== "All", statusFilter !== "All", dueFilter !== "All"].filter(Boolean).length;
