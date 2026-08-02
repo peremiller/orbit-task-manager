@@ -569,8 +569,16 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     function retryWhenOnline() {
       setSyncRetry((value) => value + 1);
     }
+    function markOffline() {
+      syncWasOffline.current = true;
+      setSyncStatus("offline");
+    }
     window.addEventListener("online", retryWhenOnline);
-    return () => window.removeEventListener("online", retryWhenOnline);
+    window.addEventListener("offline", markOffline);
+    return () => {
+      window.removeEventListener("online", retryWhenOnline);
+      window.removeEventListener("offline", markOffline);
+    };
   }, []);
 
   useEffect(() => {
