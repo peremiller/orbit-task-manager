@@ -41,6 +41,20 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  DEFAULT_FOCUS_SECONDS,
+  DEFAULT_FOCUS_TIMER,
+  extendFocusTimer,
+  finishFocusTimer,
+  focusSecondsLeft,
+  normalizeFocusHistory,
+  normalizeFocusTimer,
+  pauseFocusTimer,
+  resumeFocusTimer,
+  startFocusTimer,
+  type FocusHistoryEntry,
+  type FocusTimerState,
+} from "@/lib/focus-timer";
 import { filterTasks } from "@/lib/task-filters";
 import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-recovery";
 
@@ -87,6 +101,8 @@ type WorkspaceResponse = {
     tasks: Task[];
     projects: Project[];
     schedule: ScheduleWindow;
+    focusTimer: FocusTimerState;
+    focusHistory: FocusHistoryEntry[];
     revision: number;
     updatedAt: string;
   } | null;
@@ -112,7 +128,8 @@ const INITIAL_PROJECTS: Project[] = [
 ];
 
 const PROJECT_COLORS = ["#2457ff", "#8f5dff", "#ff8a34", "#13a57a", "#e74b71", "#0891b2", "#ca8a04", "#7c3aed"];
-const DEFAULT_TODAY_SCHEDULE: ScheduleWindow = { startTime: "09:00", endTime: "17:00" };
+const DEFAULT_TODAY_SCHEDULE: ScheduleWindow = { startTime: "08:00", endTime: "18:00" };
+const LEGACY_TODAY_SCHEDULE: ScheduleWindow = { startTime: "09:00", endTime: "17:00" };
 const TIME_VALUE_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: string }> = {
@@ -182,9 +199,21 @@ function priorityClass(priority: Priority) {
 }
 
 function timeLabel(totalSeconds: number) {
-  const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, "0");
   const seconds = (totalSeconds % 60).toString().padStart(2, "0");
-  return `${minutes}:${seconds}`;
+  return hours ? `${hours}:${minutes}:${seconds}` : `${minutes}:${seconds}`;
+}
+
+function timeOfDayGreeting(date: Date) {
+  const hour = date.getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+function currentTimeMs() {
+  return Date.now();
 }
 
 function timeValueToMinutes(value: string) {
@@ -212,15 +241,15 @@ function formatScheduleTime(value: string) {
 function scheduleTimeLabels(schedule: ScheduleWindow) {
   const start = timeValueToMinutes(schedule.startTime);
   const end = timeValueToMinutes(schedule.endTime);
-  return Array.from({ length: 5 }, (_, index) => {
-    const point = Math.round(start + ((end - start) * index) / 4);
+  return Array.from({ length: 6 }, (_, index) => {
+    const point = Math.round(start + ((end - start) * index) / 5);
     const hours = Math.floor(point / 60).toString().padStart(2, "0");
     const minutes = (point % 60).toString().padStart(2, "0");
     return formatScheduleTime(`${hours}:${minutes}`);
   });
 }
 
-function accountStorageKey(kind: "tasks" | "projects" | "schedule", userId: string) {
+function accountStorageKey(kind: "tasks" | "projects" | "schedule" | "focus-timer" | "focus-history", userId: string) {
   return `orbit-${kind}-v1:${userId}`;
 }
 
@@ -228,11 +257,11 @@ function userInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "AJ";
 }
 
-async function saveWorkspace(tasks: Task[], projects: Project[], schedule: ScheduleWindow) {
+async function saveWorkspace(tasks: Task[], projects: Project[], schedule: ScheduleWindow, focusTimer: FocusTimerState, focusHistory: FocusHistoryEntry[]) {
   const response = await fetch("/api/workspace", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tasks, projects, schedule }),
+    body: JSON.stringify({ tasks, projects, schedule, focusTimer, focusHistory }),
   });
   if (!response.ok) throw new Error("Workspace save failed");
   return response.json() as Promise<WorkspaceResponse>;
@@ -263,29 +292,42 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [focusPickerOpen, setFocusPickerOpen] = useState(false);
   const [focusOpen, setFocusOpen] = useState(false);
   const [focusTask, setFocusTask] = useState<Task | null>(INITIAL_TASKS[0]);
-  const [secondsLeft, setSecondsLeft] = useState(25 * 60);
-  const [timerRunning, setTimerRunning] = useState(false);
+  const [focusTimer, setFocusTimer] = useState<FocusTimerState>({ ...DEFAULT_FOCUS_TIMER });
+  const [focusHistory, setFocusHistory] = useState<FocusHistoryEntry[]>([]);
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const [toast, setToast] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [localDateLabel, setLocalDateLabel] = useState("");
+  const [localGreeting, setLocalGreeting] = useState("Good morning");
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("loading");
+  const [syncRetry, setSyncRetry] = useState(0);
   const hydrated = useRef(false);
   const lastSyncedPayload = useRef("");
+  const syncWasOffline = useRef(false);
+  const serverRevision = useRef(0);
+  const completingSession = useRef<string | null>(null);
+  const latestWorkspace = useRef({ tasks, projects, schedule: todaySchedule, focusTimer, focusHistory });
 
   useEffect(() => {
-    function updateLocalDate() {
+    latestWorkspace.current = { tasks, projects, schedule: todaySchedule, focusTimer, focusHistory };
+  }, [focusHistory, focusTimer, projects, tasks, todaySchedule]);
+
+  useEffect(() => {
+    function updateLocalTime() {
+      const now = new Date();
       setLocalDateLabel(new Intl.DateTimeFormat(undefined, {
         weekday: "long",
         month: "long",
         day: "numeric",
-      }).format(new Date()));
+      }).format(now));
+      setLocalGreeting(timeOfDayGreeting(now));
     }
 
-    updateLocalDate();
-    const timer = window.setInterval(updateLocalDate, 60_000);
+    updateLocalTime();
+    const timer = window.setInterval(updateLocalTime, 60_000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -315,14 +357,20 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       const taskKey = accountStorageKey("tasks", user.id);
       const projectKey = accountStorageKey("projects", user.id);
       const scheduleKey = accountStorageKey("schedule", user.id);
+      const focusTimerKey = accountStorageKey("focus-timer", user.id);
+      const focusHistoryKey = accountStorageKey("focus-history", user.id);
       let cachedTasks: Task[] | null = null;
       let cachedProjects: Project[] | null = null;
       let cachedSchedule: ScheduleWindow | null = null;
+      let cachedFocusTimer: FocusTimerState = { ...DEFAULT_FOCUS_TIMER };
+      let cachedFocusHistory: FocusHistoryEntry[] = [];
       let legacyTasksBackup: Task[] = [];
       let legacyProjectsBackup: Project[] = [];
       let legacyRecoveryComplete = false;
       let hasCachedWorkspace = false;
       const recoveryKey = `orbit-legacy-recovery-v1:${user.id}`;
+      const scheduleMigrationKey = `orbit-schedule-10-hour-v1:${user.id}`;
+      let scheduleMigrationComplete = false;
 
       try {
         const legacyTasks = user.id === "aj-miller" ? window.localStorage.getItem("orbit-tasks-v1") : null;
@@ -330,7 +378,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         const storedTasks = window.localStorage.getItem(taskKey) ?? legacyTasks;
         const storedProjects = window.localStorage.getItem(projectKey) ?? legacyProjects;
         const storedSchedule = window.localStorage.getItem(scheduleKey);
-        hasCachedWorkspace = Boolean(storedTasks || storedProjects || storedSchedule);
+        const storedFocusTimer = window.localStorage.getItem(focusTimerKey);
+        const storedFocusHistory = window.localStorage.getItem(focusHistoryKey);
+        hasCachedWorkspace = Boolean(storedTasks || storedProjects || storedSchedule || storedFocusTimer || storedFocusHistory);
         if (storedTasks) {
           const parsedTasks = JSON.parse(storedTasks);
           if (Array.isArray(parsedTasks)) cachedTasks = parsedTasks;
@@ -347,11 +397,14 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           const parsedSchedule = JSON.parse(storedSchedule);
           if (isScheduleWindow(parsedSchedule)) cachedSchedule = parsedSchedule;
         }
+        if (storedFocusTimer) cachedFocusTimer = normalizeFocusTimer(JSON.parse(storedFocusTimer));
+        if (storedFocusHistory) cachedFocusHistory = normalizeFocusHistory(JSON.parse(storedFocusHistory));
         if (legacyProjects) {
           const parsedLegacyProjects = JSON.parse(legacyProjects);
           if (Array.isArray(parsedLegacyProjects)) legacyProjectsBackup = parsedLegacyProjects;
         }
         legacyRecoveryComplete = window.localStorage.getItem(recoveryKey) === "complete";
+        scheduleMigrationComplete = window.localStorage.getItem(scheduleMigrationKey) === "complete";
         if (!window.localStorage.getItem(taskKey) && legacyTasks) window.localStorage.setItem(taskKey, legacyTasks);
         if (!window.localStorage.getItem(projectKey) && legacyProjects) window.localStorage.setItem(projectKey, legacyProjects);
       } catch {
@@ -361,19 +414,33 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       let nextTasks = cachedTasks ?? INITIAL_TASKS;
       let nextProjects = cachedProjects ?? INITIAL_PROJECTS;
       let nextSchedule = cachedSchedule ?? DEFAULT_TODAY_SCHEDULE;
+      let nextFocusTimer = cachedFocusTimer;
+      let nextFocusHistory = cachedFocusHistory;
       let status: SyncStatus = "offline";
       let recoveredLegacyWorkspace = false;
+      let migratedTenHourSchedule = false;
 
       try {
         const response = await fetch("/api/workspace", { cache: "no-store" });
         if (!response.ok) throw new Error("Workspace load failed");
+        if (response.headers.get("X-Orbit-Offline") === "true") throw new Error("Using offline workspace cache");
         const { workspace } = await response.json() as WorkspaceResponse;
         if (workspace) {
           nextTasks = Array.isArray(workspace.tasks) ? workspace.tasks : INITIAL_TASKS;
           nextProjects = Array.isArray(workspace.projects) ? workspace.projects : INITIAL_PROJECTS;
           nextSchedule = isScheduleWindow(workspace.schedule) ? workspace.schedule : DEFAULT_TODAY_SCHEDULE;
+          nextFocusTimer = normalizeFocusTimer(workspace.focusTimer);
+          nextFocusHistory = normalizeFocusHistory(workspace.focusHistory);
+          serverRevision.current = workspace.revision;
         } else if (hasCachedWorkspace) {
-          await saveWorkspace(nextTasks, nextProjects, nextSchedule);
+          const saved = await saveWorkspace(nextTasks, nextProjects, nextSchedule, nextFocusTimer, nextFocusHistory);
+          serverRevision.current = saved.workspace?.revision ?? 0;
+        }
+
+        if (!scheduleMigrationComplete && nextSchedule.startTime === LEGACY_TODAY_SCHEDULE.startTime && nextSchedule.endTime === LEGACY_TODAY_SCHEDULE.endTime) {
+          nextSchedule = DEFAULT_TODAY_SCHEDULE;
+          migratedTenHourSchedule = true;
+          window.localStorage.setItem(scheduleMigrationKey, "complete");
         }
 
         if (!legacyRecoveryComplete && user.id === "aj-miller" && (legacyTasksBackup.length || legacyProjectsBackup.length)) {
@@ -383,7 +450,10 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             || JSON.stringify(recoveredProjects) !== JSON.stringify(nextProjects);
           nextTasks = recoveredTasks;
           nextProjects = recoveredProjects;
-          if (recoveredLegacyWorkspace) await saveWorkspace(nextTasks, nextProjects, nextSchedule);
+          if (recoveredLegacyWorkspace) {
+            const saved = await saveWorkspace(nextTasks, nextProjects, nextSchedule, nextFocusTimer, nextFocusHistory);
+            serverRevision.current = saved.workspace?.revision ?? serverRevision.current;
+          }
           window.localStorage.setItem(recoveryKey, "complete");
         }
         status = "synced";
@@ -395,20 +465,27 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       setTasks(nextTasks);
       setProjects(nextProjects);
       setTodaySchedule(nextSchedule);
+      setFocusTimer(nextFocusTimer);
+      setFocusHistory(nextFocusHistory);
       if (recoveredLegacyWorkspace) {
         setToast("Recovered your earlier local tasks and projects, including completion status.");
       }
-      setFocusTask((current) => nextTasks.find((task) => task.id === current?.id && !task.completed) ?? nextTasks.find((task) => !task.completed) ?? null);
-      lastSyncedPayload.current = status === "synced" ? JSON.stringify({ tasks: nextTasks, projects: nextProjects, schedule: nextSchedule }) : "";
+      setFocusTask((current) => nextTasks.find((task) => task.id === nextFocusTimer.taskId && !task.completed) ?? nextTasks.find((task) => task.id === current?.id && !task.completed) ?? nextTasks.find((task) => !task.completed) ?? null);
+      lastSyncedPayload.current = status === "synced" && !migratedTenHourSchedule
+        ? JSON.stringify({ tasks: nextTasks, projects: nextProjects, schedule: nextSchedule, focusTimer: nextFocusTimer, focusHistory: nextFocusHistory })
+        : "";
       try {
         window.localStorage.setItem(taskKey, JSON.stringify(nextTasks));
         window.localStorage.setItem(projectKey, JSON.stringify(nextProjects));
         window.localStorage.setItem(scheduleKey, JSON.stringify(nextSchedule));
+        window.localStorage.setItem(focusTimerKey, JSON.stringify(nextFocusTimer));
+        window.localStorage.setItem(focusHistoryKey, JSON.stringify(nextFocusHistory));
       } catch {
         // The server copy remains authoritative when browser storage is unavailable.
       }
       hydrated.current = true;
-      setSyncStatus(status);
+      syncWasOffline.current = status === "offline";
+      setSyncStatus(migratedTenHourSchedule ? "syncing" : status);
       setWorkspaceReady(true);
     }
 
@@ -418,15 +495,17 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
   useEffect(() => {
     if (!hydrated.current || !sessionUser) return;
-    const payload = JSON.stringify({ tasks, projects, schedule: todaySchedule });
+    const payload = JSON.stringify({ tasks, projects, schedule: todaySchedule, focusTimer, focusHistory });
     try {
       window.localStorage.setItem(accountStorageKey("tasks", sessionUser.id), JSON.stringify(tasks));
       window.localStorage.setItem(accountStorageKey("projects", sessionUser.id), JSON.stringify(projects));
       window.localStorage.setItem(accountStorageKey("schedule", sessionUser.id), JSON.stringify(todaySchedule));
+      window.localStorage.setItem(accountStorageKey("focus-timer", sessionUser.id), JSON.stringify(focusTimer));
+      window.localStorage.setItem(accountStorageKey("focus-history", sessionUser.id), JSON.stringify(focusHistory));
     } catch {
       // Continue with cloud sync even if the local cache is unavailable.
     }
-    if (payload === lastSyncedPayload.current) return;
+    if (payload === lastSyncedPayload.current && !syncWasOffline.current) return;
 
     const controller = new AbortController();
     setSyncStatus("syncing");
@@ -437,13 +516,17 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         body: payload,
         signal: controller.signal,
       })
-        .then((response) => {
+        .then(async (response) => {
           if (!response.ok) throw new Error("Workspace save failed");
+          const saved = await response.json() as WorkspaceResponse;
+          serverRevision.current = saved.workspace?.revision ?? serverRevision.current;
           lastSyncedPayload.current = payload;
+          syncWasOffline.current = false;
           setSyncStatus("synced");
         })
         .catch((error: unknown) => {
           if (error instanceof DOMException && error.name === "AbortError") return;
+          syncWasOffline.current = true;
           setSyncStatus("offline");
         });
     }, 500);
@@ -452,7 +535,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [projects, sessionUser, tasks, todaySchedule]);
+  }, [focusHistory, focusTimer, projects, sessionUser, syncRetry, tasks, todaySchedule]);
 
   useEffect(() => {
     const loadTheme = window.setTimeout(() => {
@@ -461,20 +544,93 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     return () => window.clearTimeout(loadTheme);
   }, []);
 
+  const timerRunning = focusTimer.status === "running";
+  const secondsLeft = focusSecondsLeft(focusTimer, clockNow);
+
   useEffect(() => {
     if (!timerRunning) return;
-    const timer = window.setInterval(() => {
-      setSecondsLeft((value) => {
-        if (value <= 1) {
-          setTimerRunning(false);
-          setToast("Focus session complete — beautiful work.");
-          return 25 * 60;
-        }
-        return value - 1;
-      });
-    }, 1000);
+    const timer = window.setInterval(() => setClockNow(currentTimeMs()), 1000);
     return () => window.clearInterval(timer);
   }, [timerRunning]);
+
+  useEffect(() => {
+    if (!timerRunning || secondsLeft > 0 || !focusTimer.sessionId || completingSession.current === focusTimer.sessionId) return;
+    completingSession.current = focusTimer.sessionId;
+    const completionTimer = window.setTimeout(() => {
+      const entry = finishFocusTimer(focusTimer, "completed", currentTimeMs());
+      if (entry) setFocusHistory((current) => [entry, ...current.filter((item) => item.id !== entry.id)].slice(0, 500));
+      setFocusTimer({ ...DEFAULT_FOCUS_TIMER });
+      setToast("Focus session complete — beautiful work. It’s saved in your history.");
+    }, 0);
+    return () => window.clearTimeout(completionTimer);
+  }, [focusTimer, secondsLeft, timerRunning]);
+
+  useEffect(() => {
+    function retryWhenOnline() {
+      setSyncRetry((value) => value + 1);
+    }
+    window.addEventListener("online", retryWhenOnline);
+    return () => window.removeEventListener("online", retryWhenOnline);
+  }, []);
+
+  useEffect(() => {
+    if (!sessionUser) return;
+    const timerKey = accountStorageKey("focus-timer", sessionUser.id);
+    const historyKey = accountStorageKey("focus-history", sessionUser.id);
+    function receiveTimerFromAnotherTab(event: StorageEvent) {
+      if (!event.newValue) return;
+      try {
+        if (event.key === timerKey) setFocusTimer(normalizeFocusTimer(JSON.parse(event.newValue)));
+        if (event.key === historyKey) setFocusHistory(normalizeFocusHistory(JSON.parse(event.newValue)));
+      } catch {
+        // Ignore malformed storage events and keep the current timer.
+      }
+    }
+    window.addEventListener("storage", receiveTimerFromAnotherTab);
+    return () => window.removeEventListener("storage", receiveTimerFromAnotherTab);
+  }, [sessionUser]);
+
+  useEffect(() => {
+    if (!sessionUser || !workspaceReady) return;
+    let active = true;
+
+    async function refreshWorkspace() {
+      if (!navigator.onLine) return;
+      const local = latestWorkspace.current;
+      const localPayload = JSON.stringify(local);
+      if (localPayload !== lastSyncedPayload.current) return;
+      try {
+        const response = await fetch("/api/workspace", { cache: "no-store" });
+        if (!response.ok || response.headers.get("X-Orbit-Offline") === "true") return;
+        const { workspace } = await response.json() as WorkspaceResponse;
+        if (!active || !workspace || workspace.revision <= serverRevision.current) return;
+        const remote = {
+          tasks: Array.isArray(workspace.tasks) ? workspace.tasks : INITIAL_TASKS,
+          projects: Array.isArray(workspace.projects) ? workspace.projects : INITIAL_PROJECTS,
+          schedule: isScheduleWindow(workspace.schedule) ? workspace.schedule : DEFAULT_TODAY_SCHEDULE,
+          focusTimer: normalizeFocusTimer(workspace.focusTimer),
+          focusHistory: normalizeFocusHistory(workspace.focusHistory),
+        };
+        serverRevision.current = workspace.revision;
+        lastSyncedPayload.current = JSON.stringify(remote);
+        setTasks(remote.tasks);
+        setProjects(remote.projects);
+        setTodaySchedule(remote.schedule);
+        setFocusTimer(remote.focusTimer);
+        setFocusHistory(remote.focusHistory);
+        setFocusTask((current) => remote.tasks.find((task) => task.id === remote.focusTimer.taskId && !task.completed) ?? remote.tasks.find((task) => task.id === current?.id && !task.completed) ?? remote.tasks.find((task) => !task.completed) ?? null);
+        setSyncStatus("synced");
+      } catch {
+        // Local state remains available; the online event will retry later.
+      }
+    }
+
+    const interval = window.setInterval(() => void refreshWorkspace(), 8_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [sessionUser, workspaceReady]);
 
   useEffect(() => {
     if (!toast) return;
@@ -493,10 +649,14 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         setTaskModalOpen(true);
       }
       if (event.key.toLowerCase() === "f") {
-        setFocusTask((current) => current && !current.completed ? current : tasks.find((task) => !task.completed) ?? null);
-        setTimerRunning(false);
-        setFocusOpen(false);
-        setFocusPickerOpen(true);
+        if (focusTimer.status !== "idle") {
+          setFocusPickerOpen(false);
+          setFocusOpen(true);
+        } else {
+          setFocusTask((current) => current && !current.completed ? current : tasks.find((task) => !task.completed) ?? null);
+          setFocusOpen(false);
+          setFocusPickerOpen(true);
+        }
       }
       if (event.key === "/") {
         event.preventDefault();
@@ -511,13 +671,12 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         setDeletingProject(null);
         setFocusPickerOpen(false);
         setFocusOpen(false);
-        setTimerRunning(false);
         setMobileMenuOpen(false);
       }
     }
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [activeProjectId, projects, tasks]);
+  }, [activeProjectId, focusTimer.status, projects, tasks]);
 
   const visibleTasks = useMemo(() => {
     return filterTasks(tasks, { search, priority: priorityFilter, project: projectFilter, status: statusFilter, due: dueFilter });
@@ -533,7 +692,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const heading = activeProject
     ? { eyebrow: "Project workspace", title: activeProject.name, description: "Keep every task, decision, and next move in one clear orbit." }
     : activeView === "today"
-      ? { ...VIEW_TITLES.today, eyebrow: localDateLabel, title: `Good morning, ${sessionUser?.displayName.split(" ")[0] ?? "there"}` }
+      ? { ...VIEW_TITLES.today, eyebrow: localDateLabel, title: `${localGreeting}, ${sessionUser?.displayName.split(" ")[0] ?? "there"}` }
       : VIEW_TITLES[activeView];
   const taskFiltersVisible = activeView !== "analytics" && (activeView !== "projects" || Boolean(activeProject));
   const activeFilterCount = [search.trim(), priorityFilter !== "All", projectFilter !== "All", statusFilter !== "All", dueFilter !== "All"].filter(Boolean).length;
@@ -721,6 +880,13 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     setToast(`Today’s schedule updated to ${formatScheduleTime(schedule.startTime)}–${formatScheduleTime(schedule.endTime)}`);
   }
 
+  function archiveFocusTimer(status: "completed" | "stopped", timer = focusTimer) {
+    const entry = finishFocusTimer(timer, status, currentTimeMs());
+    if (entry) setFocusHistory((current) => [entry, ...current.filter((item) => item.id !== entry.id)].slice(0, 500));
+    completingSession.current = null;
+    return entry;
+  }
+
   function openFocus(task: Task | null) {
     const nextTask = task ?? openTasks[0] ?? null;
     if (!nextTask) {
@@ -728,18 +894,63 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       setFocusPickerOpen(true);
       return;
     }
+    if (focusTimer.status !== "idle" && focusTimer.taskId === nextTask.id) {
+      setFocusTask(nextTask);
+      setFocusPickerOpen(false);
+      setFocusOpen(true);
+      return;
+    }
+    if (focusTimer.status !== "idle") archiveFocusTimer("stopped");
     setFocusTask(nextTask);
-    setSecondsLeft(25 * 60);
-    setTimerRunning(false);
+    setFocusTimer({ ...DEFAULT_FOCUS_TIMER });
     setFocusPickerOpen(false);
     setFocusOpen(true);
   }
 
   function openFocusPicker() {
+    if (focusTimer.status !== "idle") {
+      setFocusPickerOpen(false);
+      setFocusOpen(true);
+      return;
+    }
     setFocusTask((current) => current && !current.completed ? current : openTasks[0] ?? null);
-    setTimerRunning(false);
     setFocusOpen(false);
     setFocusPickerOpen(true);
+  }
+
+  function chooseDifferentFocusTask() {
+    if (focusTimer.status !== "idle") archiveFocusTimer("stopped");
+    setFocusTimer({ ...DEFAULT_FOCUS_TIMER });
+    setFocusTask(openTasks.find((task) => task.id !== focusTimer.taskId) ?? openTasks[0] ?? null);
+    setFocusOpen(false);
+    setFocusPickerOpen(true);
+  }
+
+  function toggleFocusTimer() {
+    setClockNow(currentTimeMs());
+    if (focusTimer.status === "running") {
+      setFocusTimer(pauseFocusTimer(focusTimer));
+      return;
+    }
+    if (focusTimer.status === "paused") {
+      completingSession.current = null;
+      setFocusTimer(resumeFocusTimer(focusTimer));
+      return;
+    }
+    if (!focusTask) return;
+    completingSession.current = null;
+    setFocusTimer(startFocusTimer(focusTask, focusTimer.remainingSeconds || DEFAULT_FOCUS_SECONDS));
+  }
+
+  function resetFocusTimer() {
+    if (focusTimer.status !== "idle") archiveFocusTimer("stopped");
+    setFocusTimer({ ...DEFAULT_FOCUS_TIMER });
+    setClockNow(currentTimeMs());
+  }
+
+  function addFocusTime() {
+    setFocusTimer((current) => extendFocusTimer(current, 5 * 60));
+    setClockNow(Date.now());
   }
 
   const navItems: { view: View; label: string; icon: typeof LayoutDashboard; count?: number }[] = [
@@ -836,7 +1047,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             <div className="profile">
               <div className="avatar">{userInitials(sessionUser?.displayName ?? "AJ Miller")}<span /></div>
               <div><strong>{sessionUser?.displayName ?? "AJ Miller"}</strong><small>@{sessionUser?.username ?? "aj.miller"}</small></div>
-              <form action="/api/auth/logout" method="post"><button className="profile-logout" type="submit" aria-label="Sign out" title="Sign out"><LogOut size={17} /></button></form>
+              <form action="/api/auth/logout" method="post" onSubmit={() => navigator.serviceWorker?.controller?.postMessage({ type: "CLEAR_PRIVATE_CACHE" })}><button className="profile-logout" type="submit" aria-label="Sign out" title="Sign out"><LogOut size={17} /></button></form>
             </div>
           </div>
         </header>
@@ -851,7 +1062,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             <div className="heading-actions">
               <button className="secondary-button" type="button" onClick={() => setShowSearch(true)}><Search size={17} /> Search</button>
               {activeProject && <button className="primary-button" type="button" onClick={openNewTask}><Plus size={17} /> Add task</button>}
-              <button className="focus-button" type="button" onClick={openFocusPicker}><Zap size={17} fill="currentColor" /> Start focus <kbd>F</kbd></button>
+              <button className="focus-button" type="button" onClick={openFocusPicker}><Zap size={17} fill="currentColor" /> {focusTimer.status === "idle" ? "Start focus" : `Focus · ${timeLabel(secondsLeft)}`} <kbd>F</kbd></button>
             </div>
           </section>
 
@@ -890,14 +1101,14 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               onScheduleChange={updateTodaySchedule}
             />
           )}
-          {activeView === "board" && <BoardView tasks={visibleTasks} onMove={moveTask} onToggle={toggleTask} onEdit={openEditTask} />}
-          {activeView === "upcoming" && <UpcomingView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} />}
-          {activeView === "inbox" && <ListView tasks={visibleTasks.filter((task) => !task.completed)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} />}
-          {activeView === "completed" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} empty="Complete a task and it will appear here." />}
+          {activeView === "board" && <BoardView tasks={visibleTasks} onMove={moveTask} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "upcoming" && <UpcomingView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "inbox" && <ListView tasks={visibleTasks.filter((task) => !task.completed)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "completed" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
-            ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} empty="This project is ready for its first task." />
+            ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="This project is ready for its first task." />
             : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} />)}
-          {activeView === "analytics" && <AnalyticsView tasks={tasks} />}
+          {activeView === "analytics" && <AnalyticsView tasks={tasks} focusHistory={focusHistory} />}
         </div>
       </main>
 
@@ -1009,17 +1220,17 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       {focusOpen && (
         <div className="modal-backdrop focus-backdrop" role="presentation">
           <section className="focus-modal" role="dialog" aria-modal="true" aria-label="Focus timer">
-            <button className="icon-button focus-close" onClick={() => { setFocusOpen(false); setTimerRunning(false); }} aria-label="Close focus timer"><X size={20} /></button>
+            <button className="icon-button focus-close" onClick={() => setFocusOpen(false)} aria-label="Close focus timer"><X size={20} /></button>
             <div className="focus-orbit"><span /><i /><b /></div>
             <p className="eyebrow">Deep work session</p>
-            <h2>{focusTask?.title ?? "Choose one meaningful task"}</h2>
+            <h2>{focusTimer.status !== "idle" ? focusTimer.taskTitle : focusTask?.title ?? "Choose one meaningful task"}</h2>
             <div className="timer-display">{timeLabel(secondsLeft)}</div>
-            <p className="focus-copy">One task. No noise. You have everything you need.</p>
-            <button className="focus-change" type="button" onClick={openFocusPicker}>Choose a different task</button>
+            <p className="focus-copy">{timerRunning ? "Still running if you close this window or switch devices." : focusTimer.status === "paused" ? "Paused and synced. Resume whenever you’re ready." : "One task. No noise. You have everything you need."}</p>
+            <button className="focus-change" type="button" onClick={chooseDifferentFocusTask}>Choose a different task</button>
             <div className="timer-actions">
-              <button className="timer-reset" onClick={() => { setSecondsLeft(25 * 60); setTimerRunning(false); }} aria-label="Reset timer"><RotateCcw size={19} /></button>
-              <button className="timer-play" onClick={() => setTimerRunning((value) => !value)}>{timerRunning ? <Pause size={25} fill="currentColor" /> : <Play size={25} fill="currentColor" />}<span>{timerRunning ? "Pause" : "Begin focus"}</span></button>
-              <button className="timer-reset" onClick={() => setSecondsLeft((value) => value + 5 * 60)} aria-label="Add five minutes"><Plus size={19} /></button>
+              <button className="timer-reset" onClick={resetFocusTimer} aria-label="Reset timer"><RotateCcw size={19} /></button>
+              <button className="timer-play" onClick={toggleFocusTimer}>{timerRunning ? <Pause size={25} fill="currentColor" /> : <Play size={25} fill="currentColor" />}<span>{timerRunning ? "Pause" : focusTimer.status === "paused" ? "Resume" : "Begin focus"}</span></button>
+              <button className="timer-reset" onClick={addFocusTime} aria-label="Add five minutes"><Plus size={19} /></button>
             </div>
           </section>
         </div>
@@ -1142,7 +1353,25 @@ function TodayView({ tasks, openTasks, priorities, progress, completedCount, sch
     closeScheduleEditor();
   }
 
+  function useTenHourWindow() {
+    const startMinutes = timeValueToMinutes(startTimeDraft);
+    if (startMinutes + 600 >= 24 * 60) {
+      setStartTimeDraft(DEFAULT_TODAY_SCHEDULE.startTime);
+      setEndTimeDraft(DEFAULT_TODAY_SCHEDULE.endTime);
+    } else {
+      const endMinutes = startMinutes + 600;
+      setEndTimeDraft(`${Math.floor(endMinutes / 60).toString().padStart(2, "0")}:${(endMinutes % 60).toString().padStart(2, "0")}`);
+    }
+    setScheduleError("");
+  }
+
   const timelineLabels = scheduleTimeLabels(schedule);
+  const scheduleMinutes = timeValueToMinutes(schedule.endTime) - timeValueToMinutes(schedule.startTime);
+  const planBlocks = [
+    { label: "Focused work", className: "blue-block", left: "5%", width: "30%", duration: Math.round(scheduleMinutes * 0.3) },
+    { label: "Meetings", className: "lime-block", left: "42%", width: "20%", duration: Math.round(scheduleMinutes * 0.2) },
+    { label: "Review", className: "violet-block", left: "72%", width: "20%", duration: Math.round(scheduleMinutes * 0.2) },
+  ];
 
   return (
     <div className="view-stack">
@@ -1169,14 +1398,14 @@ function TodayView({ tasks, openTasks, priorities, progress, completedCount, sch
             <form className="schedule-time-editor" onSubmit={saveSchedule}>
               <label><span>Start time</span><input type="time" value={startTimeDraft} onChange={(event) => setStartTimeDraft(event.target.value)} required /></label>
               <label><span>End time</span><input type="time" value={endTimeDraft} onChange={(event) => setEndTimeDraft(event.target.value)} required /></label>
-              <div className="schedule-editor-actions"><button type="button" onClick={closeScheduleEditor}>Cancel</button><button type="submit">Save</button></div>
+              <div className="schedule-editor-actions"><button type="button" onClick={useTenHourWindow}>10 hours</button><button type="button" onClick={closeScheduleEditor}>Cancel</button><button type="submit">Save</button></div>
               {scheduleError && <p className="schedule-error" role="alert">{scheduleError}</p>}
             </form>
           )}
-          <div className="schedule-window"><Clock3 size={14} /><span>{formatScheduleTime(schedule.startTime)}–{formatScheduleTime(schedule.endTime)}</span></div>
+          <div className="schedule-window"><Clock3 size={14} /><span>{formatScheduleTime(schedule.startTime)}–{formatScheduleTime(schedule.endTime)} · {formatDuration(scheduleMinutes)} window</span></div>
           <div className="timeline-hours" style={{ gridTemplateColumns: `repeat(${timelineLabels.length}, minmax(0, 1fr))` }}>{timelineLabels.map((hour, index) => <span key={`${hour}-${index}`}>{hour}</span>)}</div>
-          <div className="timeline-track"><span className="block blue-block" /><span className="block lime-block" /><span className="block violet-block" /></div>
-          <div className="schedule-legend"><span><i className="legend-blue" />Focused work · 3h 15m</span><span><i className="legend-lime" />Meetings · 1h</span><span><i className="legend-violet" />Review · 45m</span></div>
+          <div className="timeline-track" aria-label={`Balanced plan across a ${formatDuration(scheduleMinutes)} window`}>{planBlocks.map((block) => <span className={`block ${block.className}`} style={{ left: block.left, width: block.width }} title={`${block.label}: ${formatDuration(block.duration)}`} key={block.label} />)}</div>
+          <div className="schedule-legend">{planBlocks.map((block) => <span key={block.label}><i className={`legend-${block.className.replace("-block", "")}`} />{block.label} · {formatDuration(block.duration)}</span>)}</div>
         </div>
         <div className="focus-card">
           <div className="mini-orbit"><span /><i /></div>
@@ -1200,7 +1429,7 @@ function PriorityCard({ task, index, onToggle, onEdit, onFocus }: { task: Task; 
   );
 }
 
-function BoardView({ tasks, onMove, onToggle, onEdit }: { tasks: Task[]; onMove: (id: number, status: TaskStatus) => void; onToggle: (id: number) => void; onEdit: (task: Task) => void }) {
+function BoardView({ tasks, onMove, onToggle, onEdit, onFocus }: { tasks: Task[]; onMove: (id: number, status: TaskStatus) => void; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
   const columns: { status: TaskStatus; title: string; color: string }[] = [
     { status: "todo", title: "To do", color: "#2457ff" },
     { status: "in-progress", title: "In progress", color: "#c9ff3d" },
@@ -1216,7 +1445,7 @@ function BoardView({ tasks, onMove, onToggle, onEdit }: { tasks: Task[]; onMove:
             <div className="board-list">
               {columnTasks.map((task) => (
                 <article className="board-task" key={task.id} draggable onDragStart={(event) => event.dataTransfer.setData("task-id", String(task.id))}>
-                  <div><span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span><button onClick={() => onEdit(task)}><MoreHorizontal size={18} /></button></div>
+                  <div><span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span><TaskActions task={task} onEdit={onEdit} onFocus={onFocus} /></div>
                   <h3 onClick={() => onEdit(task)}>{task.title}</h3>
                   <p>{task.notes}</p>
                   <div className="board-task-footer"><span><Folder size={14} />{task.project}</span><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)}>{task.completed && <Check size={13} />}</button></div>
@@ -1231,21 +1460,54 @@ function BoardView({ tasks, onMove, onToggle, onEdit }: { tasks: Task[]; onMove:
   );
 }
 
-function UpcomingView({ tasks, projects, onToggle, onEdit }: { tasks: Task[]; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void }) {
+function UpcomingView({ tasks, projects, onToggle, onEdit, onFocus }: { tasks: Task[]; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
   const days = ["Today", "Tomorrow", "Friday", "Monday", "Someday"];
   return <section className="timeline-list">{days.map((day, dayIndex) => {
     const dayTasks = tasks.filter((task) => task.due === day && !task.completed);
     if (!dayTasks.length) return null;
-    return <div className="timeline-day" key={day}><div className={dayIndex === 0 ? "day-marker current" : "day-marker"}><strong>{day === "Today" ? "01" : String(dayIndex + 2).padStart(2, "0")}</strong><span>{day}</span></div><div className="day-tasks">{dayTasks.map((task) => <TaskRow key={task.id} task={task} projects={projects} onToggle={onToggle} onEdit={onEdit} />)}</div></div>;
+    return <div className="timeline-day" key={day}><div className={dayIndex === 0 ? "day-marker current" : "day-marker"}><strong>{day === "Today" ? "01" : String(dayIndex + 2).padStart(2, "0")}</strong><span>{day}</span></div><div className="day-tasks">{dayTasks.map((task) => <TaskRow key={task.id} task={task} projects={projects} onToggle={onToggle} onEdit={onEdit} onFocus={onFocus} />)}</div></div>;
   })}</section>;
 }
 
-function ListView({ tasks, projects, title, onToggle, onEdit, empty = "No tasks match this view." }: { tasks: Task[]; projects: Project[]; title: string; onToggle: (id: number) => void; onEdit: (task: Task) => void; empty?: string }) {
-  return <section className="list-card"><div className="list-card-header"><div><p className="eyebrow">{tasks.length} tasks</p><h2>{title}</h2></div></div>{tasks.length ? <div className="task-list">{tasks.map((task) => <TaskRow key={task.id} task={task} projects={projects} onToggle={onToggle} onEdit={onEdit} />)}</div> : <div className="empty-list"><CheckCircle2 size={32} /><h3>All clear</h3><p>{empty}</p></div>}</section>;
+function ListView({ tasks, projects, title, onToggle, onEdit, onFocus, empty = "No tasks match this view." }: { tasks: Task[]; projects: Project[]; title: string; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void; empty?: string }) {
+  return <section className="list-card"><div className="list-card-header"><div><p className="eyebrow">{tasks.length} tasks</p><h2>{title}</h2></div></div>{tasks.length ? <div className="task-list">{tasks.map((task) => <TaskRow key={task.id} task={task} projects={projects} onToggle={onToggle} onEdit={onEdit} onFocus={onFocus} />)}</div> : <div className="empty-list"><CheckCircle2 size={32} /><h3>All clear</h3><p>{empty}</p></div>}</section>;
 }
 
-function TaskRow({ task, projects, onToggle, onEdit }: { task: Task; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void }) {
-  return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={`Toggle ${task.title}`}>{task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}</h3><div><span><span className="project-dot" style={{ background: projects.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.due}</span><span><Clock3 size={13} />{task.time}</span></div></div><span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span><button className="icon-button" onClick={() => onEdit(task)} aria-label="Edit task"><MoreHorizontal size={18} /></button></article>;
+function TaskRow({ task, projects, onToggle, onEdit, onFocus }: { task: Task; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
+  return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={`Toggle ${task.title}`}>{task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}</h3><div><span><span className="project-dot" style={{ background: projects.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.due}</span><span><Clock3 size={13} />{task.time}</span></div></div><span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span><TaskActions task={task} onEdit={onEdit} onFocus={onFocus} /></article>;
+}
+
+function TaskActions({ task, onEdit, onFocus }: { task: Task; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function closeMenu(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("pointerdown", closeMenu);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenu);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="task-actions" ref={menuRef}>
+      <button className="icon-button task-actions-trigger" type="button" onClick={() => setOpen((value) => !value)} aria-label={`Actions for ${task.title}`} aria-haspopup="menu" aria-expanded={open}><MoreHorizontal size={18} /></button>
+      {open && (
+        <div className="task-actions-menu" role="menu">
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); onEdit(task); }}><Pencil size={15} /> Edit task</button>
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); onFocus(task); }}><Zap size={15} /> Start focus</button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenameProject, onDeleteProject }: { tasks: Task[]; projects: Project[]; onCreateProject: () => void; onOpenProject: (project: Project) => void; onRenameProject: (project: Project) => void; onDeleteProject: (project: Project) => void }) {
@@ -1315,9 +1577,37 @@ function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenam
   );
 }
 
-function AnalyticsView({ tasks }: { tasks: Task[] }) {
+function AnalyticsView({ tasks, focusHistory }: { tasks: Task[]; focusHistory: FocusHistoryEntry[] }) {
   const completed = tasks.filter((task) => task.completed).length;
-  return <div className="analytics-grid"><article className="analytics-hero"><div><p className="eyebrow">Weekly focus score</p><h2>86</h2><span className="positive"><TrendingUp size={15} /> 12% from last week</span></div><div className="score-orbit"><span>86</span><i /></div></article><article className="stat-card"><span className="stat-icon lime"><Flame size={20} /></span><div><strong>7 days</strong><span>Focus streak</span></div></article><article className="stat-card"><span className="stat-icon blue"><CheckCircle2 size={20} /></span><div><strong>{completed}</strong><span>Tasks completed</span></div></article><article className="chart-card"><div className="card-title-row"><div><p className="eyebrow">Completion rhythm</p><h3>This week</h3></div><span className="positive">+18%</span></div><div className="bar-chart">{[36, 58, 44, 78, 64, 88, 54].map((height, index) => <div key={index}><span style={{ height: `${height}%` }} className={index === 5 ? "active" : ""} /><small>{["M", "T", "W", "T", "F", "S", "S"][index]}</small></div>)}</div></article><article className="insight-card"><span className="stat-icon blue"><Sparkles size={20} /></span><p className="eyebrow">Orbit insight</p><h3>Your best work happens before noon.</h3><p>You complete 42% more high-priority tasks between 9 AM and 12 PM. Protect that window for deep work.</p><button>Plan a focus block <ArrowRight size={15} /></button></article></div>;
+  const completedFocusSessions = focusHistory.filter((entry) => entry.status === "completed");
+  const totalFocusSeconds = completedFocusSessions.reduce((total, entry) => total + entry.durationSeconds, 0);
+  const todayKey = new Date().toDateString();
+  const todayFocusSeconds = completedFocusSessions.filter((entry) => new Date(entry.endedAt).toDateString() === todayKey).reduce((total, entry) => total + entry.durationSeconds, 0);
+
+  return (
+    <div className="analytics-grid">
+      <article className="analytics-hero"><div><p className="eyebrow">Tracked focus time</p><h2>{formatDuration(Math.round(totalFocusSeconds / 60))}</h2><span className="positive"><TrendingUp size={15} /> {completedFocusSessions.length} completed sessions</span></div><div className="score-orbit"><span>{completedFocusSessions.length}</span><i /></div></article>
+      <article className="stat-card"><span className="stat-icon lime"><Flame size={20} /></span><div><strong>{formatDuration(Math.round(todayFocusSeconds / 60))}</strong><span>Focused today</span></div></article>
+      <article className="stat-card"><span className="stat-icon blue"><CheckCircle2 size={20} /></span><div><strong>{completed}</strong><span>Tasks completed</span></div></article>
+      <article className="chart-card"><div className="card-title-row"><div><p className="eyebrow">Completion rhythm</p><h3>This week</h3></div><span className="positive">Keep building</span></div><div className="bar-chart">{[36, 58, 44, 78, 64, 88, 54].map((height, index) => <div key={index}><span style={{ height: `${height}%` }} className={index === 5 ? "active" : ""} /><small>{["M", "T", "W", "T", "F", "S", "S"][index]}</small></div>)}</div></article>
+      <article className="insight-card"><span className="stat-icon blue"><Sparkles size={20} /></span><p className="eyebrow">Orbit insight</p><h3>Your best work happens before noon.</h3><p>Use the balanced 10-hour plan to protect focused work, meetings, and review time without crowding the day.</p><button>Plan a focus block <ArrowRight size={15} /></button></article>
+      <article className="focus-history-card">
+        <div className="card-title-row"><div><p className="eyebrow">Timer tracking</p><h3>Focus history</h3></div><span>{focusHistory.length} sessions</span></div>
+        {focusHistory.length ? (
+          <div className="focus-history-list">
+            {focusHistory.slice(0, 10).map((entry) => (
+              <div className="focus-history-row" key={entry.id}>
+                <span className={`focus-history-status ${entry.status}`}><Zap size={14} /></span>
+                <div><strong>{entry.taskTitle}</strong><small>{new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(entry.endedAt))}</small></div>
+                <span>{formatDuration(Math.max(1, Math.round(entry.durationSeconds / 60)))}</span>
+                <em>{entry.status === "completed" ? "Completed" : "Stopped"}</em>
+              </div>
+            ))}
+          </div>
+        ) : <div className="focus-history-empty"><Clock3 size={26} /><strong>No timer history yet</strong><p>Completed and stopped focus sessions will appear here.</p></div>}
+      </article>
+    </div>
+  );
 }
 
 function EmptyState({ onAdd }: { onAdd: () => void }) {

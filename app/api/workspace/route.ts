@@ -1,10 +1,12 @@
 import { cookies } from "next/headers";
 import { getOrbitWorkspace, normalizeScheduleWindow, saveOrbitWorkspace, type ScheduleWindow } from "../../../lib/orbit-db";
 import { ORBIT_SESSION_COOKIE, verifyOrbitSession } from "../../../lib/orbit-auth";
+import { normalizeFocusHistory, normalizeFocusTimer, type FocusHistoryEntry, type FocusTimerState } from "../../../lib/focus-timer";
 
-const MAX_BODY_BYTES = 600_000;
+const MAX_BODY_BYTES = 1_000_000;
 const MAX_TASKS = 2_000;
 const MAX_PROJECTS = 500;
+const MAX_FOCUS_HISTORY = 500;
 
 async function authenticatedUser() {
   const cookieStore = await cookies();
@@ -37,7 +39,7 @@ export async function PUT(request: Request) {
       return Response.json({ error: "Workspace is too large" }, { status: 413 });
     }
 
-    const body = JSON.parse(rawBody) as { tasks?: unknown; projects?: unknown; schedule?: unknown };
+    const body = JSON.parse(rawBody) as { tasks?: unknown; projects?: unknown; schedule?: unknown; focusTimer?: unknown; focusHistory?: unknown };
     if (!Array.isArray(body.tasks) || !Array.isArray(body.projects)) {
       return Response.json({ error: "Tasks and projects must be arrays" }, { status: 400 });
     }
@@ -49,8 +51,25 @@ export async function PUT(request: Request) {
       schedule = normalizeScheduleWindow(body.schedule) ?? undefined;
       if (!schedule) return Response.json({ error: "Schedule start and end times are invalid" }, { status: 400 });
     }
+    let focusTimer: FocusTimerState | undefined;
+    if (body.focusTimer !== undefined) {
+      focusTimer = normalizeFocusTimer(body.focusTimer);
+      if (focusTimer.status === "idle" && (body.focusTimer as { status?: unknown })?.status !== "idle") {
+        return Response.json({ error: "Focus timer is invalid" }, { status: 400 });
+      }
+    }
+    let focusHistory: FocusHistoryEntry[] | undefined;
+    if (body.focusHistory !== undefined) {
+      if (!Array.isArray(body.focusHistory) || body.focusHistory.length > MAX_FOCUS_HISTORY) {
+        return Response.json({ error: "Focus history is invalid" }, { status: 400 });
+      }
+      focusHistory = normalizeFocusHistory(body.focusHistory);
+      if (focusHistory.length !== body.focusHistory.length) {
+        return Response.json({ error: "Focus history contains invalid entries" }, { status: 400 });
+      }
+    }
 
-    const workspace = await saveOrbitWorkspace(user.id, body.tasks, body.projects, schedule);
+    const workspace = await saveOrbitWorkspace(user.id, body.tasks, body.projects, schedule, focusTimer, focusHistory);
     return Response.json({ workspace }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof SyntaxError) return Response.json({ error: "Invalid JSON" }, { status: 400 });

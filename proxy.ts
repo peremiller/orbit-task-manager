@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { ORBIT_SESSION_COOKIE, safeReturnTo, verifyOrbitSession } from "./lib/orbit-auth";
 
-const PUBLIC_PATHS = new Set(["/login", "/api/auth/login", "/api/auth/logout", "/api/auth/session"]);
+const PUBLIC_PATHS = new Set(["/login", "/api/auth/login", "/api/auth/logout", "/api/auth/session", "/manifest.webmanifest", "/sw.js"]);
 
 function clearInvalidSession(response: NextResponse, hasSessionCookie: boolean) {
   if (!hasSessionCookie) return response;
