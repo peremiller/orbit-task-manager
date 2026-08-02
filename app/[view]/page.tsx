@@ -8,6 +8,7 @@ const ROUTE_VIEWS: Record<string, View> = {
   board: "board",
   projects: "projects",
   insights: "analytics",
+  "timer-history": "timerHistory",
   completed: "completed",
 };
 

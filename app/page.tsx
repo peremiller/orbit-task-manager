@@ -61,7 +61,7 @@ import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-rec
 type Priority = "Very High" | "High" | "Medium" | "Low";
 type TaskStatus = "todo" | "in-progress" | "done";
 type StatusFilter = "All" | TaskStatus;
-export type View = "today" | "inbox" | "upcoming" | "board" | "projects" | "analytics" | "completed";
+export type View = "today" | "inbox" | "upcoming" | "board" | "projects" | "analytics" | "timerHistory" | "completed";
 
 type Task = {
   id: number;
@@ -139,6 +139,7 @@ const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: s
   board: { eyebrow: "Flow of work", title: "Board", description: "Move tasks from intention to done." },
   projects: { eyebrow: "Work with a purpose", title: "Projects", description: "Every active outcome, in one clear place." },
   analytics: { eyebrow: "Your momentum", title: "Insights", description: "See how focus compounds over time." },
+  timerHistory: { eyebrow: "Your focused time", title: "Timer History", description: "Review every completed and stopped focus session." },
   completed: { eyebrow: "Progress worth noticing", title: "Completed", description: "A record of what you moved forward." },
 };
 
@@ -149,6 +150,7 @@ const VIEW_PATHS: Record<View, string> = {
   board: "/board",
   projects: "/projects",
   analytics: "/insights",
+  timerHistory: "/timer-history",
   completed: "/completed",
 };
 
@@ -702,7 +704,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     : activeView === "today"
       ? { ...VIEW_TITLES.today, eyebrow: localDateLabel, title: `${localGreeting}, ${sessionUser?.displayName.split(" ")[0] ?? "there"}` }
       : VIEW_TITLES[activeView];
-  const taskFiltersVisible = activeView !== "analytics" && (activeView !== "projects" || Boolean(activeProject));
+  const taskFiltersVisible = activeView !== "analytics" && activeView !== "timerHistory" && (activeView !== "projects" || Boolean(activeProject));
   const activeFilterCount = [search.trim(), priorityFilter !== "All", projectFilter !== "All", statusFilter !== "All", dueFilter !== "All"].filter(Boolean).length;
   const viewTaskCount = activeProject
     ? visibleTasks.filter((task) => task.project === activeProject.name).length
@@ -967,6 +969,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     { view: "upcoming", label: "Upcoming", icon: CalendarDays },
     { view: "board", label: "Board", icon: KanbanSquare },
     { view: "analytics", label: "Insights", icon: BarChart3 },
+    { view: "timerHistory", label: "Timer History", icon: Clock3, count: focusHistory.length },
     { view: "completed", label: "Completed", icon: CheckCircle2, count: completedCount },
   ];
 
@@ -1044,7 +1047,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           <button className="icon-button menu-button" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation"><Menu size={21} /></button>
           <div className={`search-box ${showSearch ? "search-visible" : ""}`}>
             <Search size={18} />
-            <input id="orbit-search" type="search" placeholder="Search tasks…" value={search} onChange={(event) => setSearch(event.target.value)} aria-label="Search tasks" />
+            <input id="orbit-search" type="search" placeholder={activeView === "timerHistory" ? "Search timer history…" : "Search tasks…"} value={search} onChange={(event) => setSearch(event.target.value)} aria-label={activeView === "timerHistory" ? "Search timer history" : "Search tasks"} />
             {!search && <kbd>/</kbd>}
           </div>
           <div className="topbar-actions">
@@ -1117,6 +1120,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="This project is ready for its first task." />
             : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} />)}
           {activeView === "analytics" && <AnalyticsView tasks={tasks} focusHistory={focusHistory} />}
+          {activeView === "timerHistory" && <TimerHistoryView focusHistory={focusHistory} search={search} now={clockNow} />}
         </div>
       </main>
 
@@ -1600,7 +1604,7 @@ function AnalyticsView({ tasks, focusHistory }: { tasks: Task[]; focusHistory: F
       <article className="chart-card"><div className="card-title-row"><div><p className="eyebrow">Completion rhythm</p><h3>This week</h3></div><span className="positive">Keep building</span></div><div className="bar-chart">{[36, 58, 44, 78, 64, 88, 54].map((height, index) => <div key={index}><span style={{ height: `${height}%` }} className={index === 5 ? "active" : ""} /><small>{["M", "T", "W", "T", "F", "S", "S"][index]}</small></div>)}</div></article>
       <article className="insight-card"><span className="stat-icon blue"><Sparkles size={20} /></span><p className="eyebrow">Orbit insight</p><h3>Your best work happens before noon.</h3><p>Use the balanced 10-hour plan to protect focused work, meetings, and review time without crowding the day.</p><button>Plan a focus block <ArrowRight size={15} /></button></article>
       <article className="focus-history-card">
-        <div className="card-title-row"><div><p className="eyebrow">Timer tracking</p><h3>Focus history</h3></div><span>{focusHistory.length} sessions</span></div>
+        <div className="card-title-row"><div><p className="eyebrow">Timer tracking</p><h3>Focus history</h3></div><Link className="history-link" href="/timer-history">View all <ArrowRight size={14} /></Link></div>
         {focusHistory.length ? (
           <div className="focus-history-list">
             {focusHistory.slice(0, 10).map((entry) => (
@@ -1614,6 +1618,95 @@ function AnalyticsView({ tasks, focusHistory }: { tasks: Task[]; focusHistory: F
           </div>
         ) : <div className="focus-history-empty"><Clock3 size={26} /><strong>No timer history yet</strong><p>Completed and stopped focus sessions will appear here.</p></div>}
       </article>
+    </div>
+  );
+}
+
+type TimerHistoryRange = "all" | "today" | "7days" | "30days";
+type TimerHistoryStatus = "all" | "completed" | "stopped";
+
+function TimerHistoryView({ focusHistory, search, now }: { focusHistory: FocusHistoryEntry[]; search: string; now: number }) {
+  const [range, setRange] = useState<TimerHistoryRange>("all");
+  const [status, setStatus] = useState<TimerHistoryStatus>("all");
+  const completedSessions = focusHistory.filter((entry) => entry.status === "completed");
+  const totalSeconds = focusHistory.reduce((total, entry) => total + entry.durationSeconds, 0);
+  const todayKey = new Date(now).toDateString();
+  const todaySeconds = focusHistory
+    .filter((entry) => new Date(entry.endedAt).toDateString() === todayKey)
+    .reduce((total, entry) => total + entry.durationSeconds, 0);
+  const completionRate = focusHistory.length ? Math.round((completedSessions.length / focusHistory.length) * 100) : 0;
+
+  const filteredHistory = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    const rangeDays = range === "7days" ? 7 : range === "30days" ? 30 : null;
+
+    return focusHistory.filter((entry) => {
+      if (status !== "all" && entry.status !== status) return false;
+      if (query && !entry.taskTitle.toLowerCase().includes(query)) return false;
+
+      const endedAt = new Date(entry.endedAt);
+      if (range === "today" && endedAt.toDateString() !== new Date(now).toDateString()) return false;
+      if (rangeDays && endedAt.getTime() < now - (rangeDays * 24 * 60 * 60 * 1000)) return false;
+      return true;
+    });
+  }, [focusHistory, now, range, search, status]);
+
+  const groupedHistory = useMemo(() => {
+    const groups: { label: string; entries: FocusHistoryEntry[] }[] = [];
+    for (const entry of filteredHistory) {
+      const label = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(new Date(entry.endedAt));
+      const currentGroup = groups.at(-1);
+      if (currentGroup?.label === label) currentGroup.entries.push(entry);
+      else groups.push({ label, entries: [entry] });
+    }
+    return groups;
+  }, [filteredHistory]);
+
+  return (
+    <div className="timer-history-view">
+      <section className="timer-history-summary" aria-label="Timer history summary">
+        <article className="timer-history-stat"><span className="stat-icon blue"><Clock3 size={20} /></span><div><strong>{formatDuration(Math.round(totalSeconds / 60))}</strong><span>Total tracked</span></div></article>
+        <article className="timer-history-stat"><span className="stat-icon lime"><Zap size={20} /></span><div><strong>{completedSessions.length}</strong><span>Completed sessions</span></div></article>
+        <article className="timer-history-stat"><span className="stat-icon blue"><Flame size={20} /></span><div><strong>{formatDuration(Math.round(todaySeconds / 60))}</strong><span>Focused today</span></div></article>
+        <article className="timer-history-stat"><span className="stat-icon lime"><Target size={20} /></span><div><strong>{completionRate}%</strong><span>Completion rate</span></div></article>
+      </section>
+
+      <section className="timer-history-panel">
+        <div className="timer-history-toolbar">
+          <div><p className="eyebrow">Session log</p><h2>Focus sessions</h2><span>{filteredHistory.length} of {focusHistory.length} sessions</span></div>
+          <div className="timer-history-filters">
+            <label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value as TimerHistoryStatus)}><option value="all">All statuses</option><option value="completed">Completed</option><option value="stopped">Stopped</option></select></label>
+            <label><span>Date range</span><select value={range} onChange={(event) => setRange(event.target.value as TimerHistoryRange)}><option value="all">All time</option><option value="today">Today</option><option value="7days">Last 7 days</option><option value="30days">Last 30 days</option></select></label>
+          </div>
+        </div>
+
+        {groupedHistory.length ? (
+          <div className="timer-history-groups">
+            {groupedHistory.map((group) => (
+              <div className="timer-history-group" key={group.label}>
+                <div className="timer-history-day"><strong>{group.label}</strong><span>{formatDuration(Math.round(group.entries.reduce((total, entry) => total + entry.durationSeconds, 0) / 60))}</span></div>
+                <div className="timer-history-list">
+                  {group.entries.map((entry) => {
+                    const startedAt = new Date(entry.startedAt);
+                    const endedAt = new Date(entry.endedAt);
+                    const timeFormatter = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+                    return (
+                      <article className="timer-history-row" key={entry.id}>
+                        <span className={`focus-history-status ${entry.status}`}><Zap size={15} /></span>
+                        <div className="timer-history-task"><strong>{entry.taskTitle}</strong><small>{timeFormatter.format(startedAt)}–{timeFormatter.format(endedAt)}</small></div>
+                        <div className="timer-history-duration"><strong>{formatDuration(Math.max(1, Math.round(entry.durationSeconds / 60)))}</strong><small>of {formatDuration(Math.max(1, Math.round(entry.targetSeconds / 60)))}</small></div>
+                        <em className={entry.status}>{entry.status === "completed" ? "Completed" : "Stopped"}</em>
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="timer-history-empty"><Clock3 size={32} /><strong>{focusHistory.length ? "No sessions match these filters" : "No timer history yet"}</strong><p>{focusHistory.length ? "Try a different status, date range, or search." : "Completed and stopped focus sessions will appear here."}</p></div>
+        )}
+      </section>
     </div>
   );
 }
