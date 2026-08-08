@@ -61,7 +61,9 @@ import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-rec
 type Priority = "Very High" | "High" | "Medium" | "Low";
 type TaskStatus = "todo" | "in-progress" | "done";
 type StatusFilter = "All" | TaskStatus;
-export type View = "today" | "inbox" | "upcoming" | "board" | "projects" | "analytics" | "timerHistory" | "completed";
+type Recurrence = "none" | "daily" | "weekdays" | "weekly" | "monthly";
+type Subtask = { id: number; title: string; completed: boolean };
+export type View = "today" | "inbox" | "upcoming" | "planner" | "board" | "filtersLabels" | "projects" | "analytics" | "timerHistory" | "completed";
 
 type Task = {
   id: number;
@@ -74,6 +76,11 @@ type Task = {
   status: TaskStatus;
   completed: boolean;
   notes: string;
+  labels?: string[];
+  subtasks?: Subtask[];
+  recurrence?: Recurrence;
+  createdAt?: string;
+  completedAt?: string;
 };
 
 type Project = {
@@ -136,7 +143,9 @@ const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: s
   today: { eyebrow: "", title: "Good morning, AJ", description: "Protect your attention. Move the work that matters." },
   inbox: { eyebrow: "Capture first, organize later", title: "Inbox", description: "Loose ends and new ideas, ready to be clarified." },
   upcoming: { eyebrow: "The week ahead", title: "Upcoming", description: "A calm view of what is coming and when." },
+  planner: { eyebrow: "Capacity without chaos", title: "Planner", description: "Balance effort across your week before work becomes overload." },
   board: { eyebrow: "Flow of work", title: "Board", description: "Move tasks from intention to done." },
+  filtersLabels: { eyebrow: "Your command center", title: "Filters & labels", description: "Find the right work instantly with smart views and reusable labels." },
   projects: { eyebrow: "Work with a purpose", title: "Projects", description: "Every active outcome, in one clear place." },
   analytics: { eyebrow: "Your momentum", title: "Insights", description: "See how focus compounds over time." },
   timerHistory: { eyebrow: "Your focused time", title: "Timer History", description: "Review every completed and stopped focus session." },
@@ -147,7 +156,9 @@ const VIEW_PATHS: Record<View, string> = {
   today: "/today",
   inbox: "/inbox",
   upcoming: "/upcoming",
+  planner: "/planner",
   board: "/board",
+  filtersLabels: "/filters-labels",
   projects: "/projects",
   analytics: "/insights",
   timerHistory: "/timer-history",
@@ -162,6 +173,9 @@ const emptyDraft = {
   duration: 30,
   priority: "Medium" as Priority,
   notes: "",
+  labels: [] as string[],
+  subtasks: [] as Subtask[],
+  recurrence: "none" as Recurrence,
 };
 
 const emptyProjectDraft = {
@@ -189,11 +203,109 @@ function uniqueProjectId(name: string, projects: Project[]) {
   return `${base}-${suffix}`;
 }
 
+function normalizeLabels(labels: string[]) {
+  return Array.from(new Set(labels.map((label) => label.trim().replace(/^@/, "").toLowerCase()).filter(Boolean))).slice(0, 8);
+}
+
+function recurrenceLabel(recurrence: Recurrence | undefined) {
+  const labels: Record<Recurrence, string> = {
+    none: "Does not repeat",
+    daily: "Every day",
+    weekdays: "Every weekday",
+    weekly: "Every week",
+    monthly: "Every month",
+  };
+  return labels[recurrence ?? "none"];
+}
+
+function nextRecurringDue(task: Task) {
+  if (task.recurrence === "daily") return "Tomorrow";
+  if (task.recurrence === "weekdays") return task.due === "Friday" ? "Monday" : "Tomorrow";
+  if (task.recurrence === "weekly") return "Next week";
+  if (task.recurrence === "monthly") return "Next month";
+  return task.due;
+}
+
+function subtaskProgress(task: Task) {
+  const subtasks = task.subtasks ?? [];
+  return { completed: subtasks.filter((subtask) => subtask.completed).length, total: subtasks.length };
+}
+
+function parseQuickTask(input: string, projects: Project[], defaultProject: string) {
+  let title = input.trim();
+  let project = defaultProject;
+
+  for (const candidate of [...projects].sort((a, b) => b.name.length - a.name.length)) {
+    const token = `#${projectSlug(candidate.name)}`;
+    const match = new RegExp(`(^|\\s)${token}(?=\\s|$)`, "i");
+    if (match.test(title)) {
+      project = candidate.name;
+      title = title.replace(match, " ");
+      break;
+    }
+  }
+
+  const labels = normalizeLabels(Array.from(title.matchAll(/(?:^|\s)@([a-z0-9-]+)/gi), (match) => match[1]));
+  title = title.replace(/(?:^|\s)@[a-z0-9-]+/gi, " ");
+
+  const priorityMatch = title.match(/\bp([1-4])\b/i);
+  const priorityMap: Record<string, Priority> = { "1": "Very High", "2": "High", "3": "Medium", "4": "Low" };
+  const priority = priorityMatch ? priorityMap[priorityMatch[1]] : "Medium";
+  title = title.replace(/\bp[1-4]\b/gi, " ");
+
+  let recurrence: Recurrence = "none";
+  const recurrencePatterns: [RegExp, Recurrence][] = [
+    [/\bevery weekdays?\b/i, "weekdays"],
+    [/\bevery day\b/i, "daily"],
+    [/\bevery weeks?\b/i, "weekly"],
+    [/\bevery months?\b/i, "monthly"],
+  ];
+  for (const [pattern, value] of recurrencePatterns) {
+    if (pattern.test(title)) {
+      recurrence = value;
+      title = title.replace(pattern, " ");
+      break;
+    }
+  }
+
+  const dueOptions = ["Next month", "Next week", "Tomorrow", "Today", "Friday", "Monday", "Someday"];
+  const due = dueOptions.find((option) => new RegExp(`\\b${option}\\b`, "i").test(title)) ?? "Today";
+  title = title.replace(new RegExp(`\\b${due}\\b`, "i"), " ");
+
+  const durationMatch = title.match(/\b(\d+(?:\.\d+)?)\s*(m|min|mins|h|hr|hrs)\b/i);
+  const duration = durationMatch
+    ? Math.max(5, Math.round(Number(durationMatch[1]) * (/^h/i.test(durationMatch[2]) ? 60 : 1)))
+    : 30;
+  if (durationMatch) title = title.replace(durationMatch[0], " ");
+
+  const timeMatch = title.match(/\b(?:1[0-2]|0?[1-9])(?::[0-5]\d)?\s?(?:am|pm)\b/i);
+  const time = timeMatch ? timeMatch[0].replace(/\s+/g, " ").toUpperCase() : "9:00 AM";
+  if (timeMatch) title = title.replace(timeMatch[0], " ");
+
+  return {
+    title: title.replace(/\s+/g, " ").trim(),
+    project,
+    due,
+    time,
+    duration,
+    priority,
+    notes: "",
+    labels,
+    subtasks: [] as Subtask[],
+    recurrence,
+  };
+}
+
 function formatDuration(minutes: number) {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   return mins ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+function formatCompletedAt(value: string | undefined) {
+  if (!value) return "Completion time unavailable";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value));
 }
 
 function priorityClass(priority: Priority) {
@@ -281,8 +393,11 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [projectFilter, setProjectFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [dueFilter, setDueFilter] = useState("All");
+  const [labelFilter, setLabelFilter] = useState("All");
+  const [quickAdd, setQuickAdd] = useState("");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [subtaskInput, setSubtaskInput] = useState("");
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [newProjectDraft, setNewProjectDraft] = useState(emptyProjectDraft);
   const [projectCreateError, setProjectCreateError] = useState("");
@@ -673,6 +788,10 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         setShowSearch(true);
         window.setTimeout(() => document.getElementById("orbit-search")?.focus(), 50);
       }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        document.getElementById("orbit-quick-add")?.focus();
+      }
       if (event.key === "Escape") {
         setTaskModalOpen(false);
         setProjectModalOpen(false);
@@ -689,8 +808,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   }, [activeProjectId, focusTimer.status, projects, tasks]);
 
   const visibleTasks = useMemo(() => {
-    return filterTasks(tasks, { search, priority: priorityFilter, project: projectFilter, status: statusFilter, due: dueFilter });
-  }, [dueFilter, priorityFilter, projectFilter, search, statusFilter, tasks]);
+    return filterTasks(tasks, { search, priority: priorityFilter, project: projectFilter, status: statusFilter, due: dueFilter, label: labelFilter });
+  }, [dueFilter, labelFilter, priorityFilter, projectFilter, search, statusFilter, tasks]);
 
   const openTasks = tasks.filter((task) => !task.completed);
   const completedCount = tasks.filter((task) => task.completed).length;
@@ -704,8 +823,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     : activeView === "today"
       ? { ...VIEW_TITLES.today, eyebrow: localDateLabel, title: `${localGreeting}, ${sessionUser?.displayName.split(" ")[0] ?? "there"}` }
       : VIEW_TITLES[activeView];
-  const taskFiltersVisible = activeView !== "analytics" && activeView !== "timerHistory" && (activeView !== "projects" || Boolean(activeProject));
-  const activeFilterCount = [search.trim(), priorityFilter !== "All", projectFilter !== "All", statusFilter !== "All", dueFilter !== "All"].filter(Boolean).length;
+  const taskFiltersVisible = activeView !== "analytics" && activeView !== "timerHistory" && activeView !== "filtersLabels" && (activeView !== "projects" || Boolean(activeProject));
+  const activeFilterCount = [search.trim(), priorityFilter !== "All", projectFilter !== "All", statusFilter !== "All", dueFilter !== "All", labelFilter !== "All"].filter(Boolean).length;
   const viewTaskCount = activeProject
     ? visibleTasks.filter((task) => task.project === activeProject.name).length
     : activeView === "inbox" || activeView === "upcoming"
@@ -727,6 +846,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     setProjectFilter("All");
     setStatusFilter("All");
     setDueFilter("All");
+    setLabelFilter("All");
   }
 
   function navigate(view: View) {
@@ -756,7 +876,28 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     const defaultProject = projects.find((project) => project.id === activeProjectId)?.name ?? projects[0]?.name ?? "";
     setEditingTask(null);
     setDraft({ ...emptyDraft, project: defaultProject });
+    setSubtaskInput("");
     setTaskModalOpen(true);
+  }
+
+  function addQuickTask(event: FormEvent) {
+    event.preventDefault();
+    const defaultProject = projects.find((project) => project.id === activeProjectId)?.name ?? projects[0]?.name ?? "";
+    const parsed = parseQuickTask(quickAdd, projects, defaultProject);
+    if (!parsed.title) {
+      setToast("Add a task name before the details");
+      return;
+    }
+    const task: Task = {
+      ...parsed,
+      id: Date.now(),
+      status: "todo",
+      completed: false,
+      createdAt: new Date().toISOString(),
+    };
+    setTasks((current) => [task, ...current]);
+    setQuickAdd("");
+    setToast(`${task.title} added · ${task.due}${task.recurrence !== "none" ? ` · ${recurrenceLabel(task.recurrence)}` : ""}`);
   }
 
   function openNewProject() {
@@ -851,18 +992,29 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       duration: task.duration,
       priority: task.priority,
       notes: task.notes,
+      labels: task.labels ?? [],
+      subtasks: task.subtasks ?? [],
+      recurrence: task.recurrence ?? "none",
     });
+    setSubtaskInput("");
     setTaskModalOpen(true);
+  }
+
+  function addDraftSubtask() {
+    const title = subtaskInput.trim();
+    if (!title) return;
+    setDraft((current) => ({ ...current, subtasks: [...current.subtasks, { id: Date.now(), title, completed: false }] }));
+    setSubtaskInput("");
   }
 
   function saveTask(event: FormEvent) {
     event.preventDefault();
     if (!draft.title.trim()) return;
     if (editingTask) {
-      setTasks((current) => current.map((task) => task.id === editingTask.id ? { ...task, ...draft, title: draft.title.trim() } : task));
+      setTasks((current) => current.map((task) => task.id === editingTask.id ? { ...task, ...draft, labels: normalizeLabels(draft.labels), title: draft.title.trim() } : task));
       setToast("Task updated");
     } else {
-      const task: Task = { ...draft, title: draft.title.trim(), id: Date.now(), status: "todo", completed: false };
+      const task: Task = { ...draft, labels: normalizeLabels(draft.labels), title: draft.title.trim(), id: Date.now(), status: "todo", completed: false, createdAt: new Date().toISOString() };
       setTasks((current) => [task, ...current]);
       setToast("Task added to your day");
     }
@@ -871,8 +1023,29 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
   function toggleTask(id: number) {
     const target = tasks.find((task) => task.id === id);
-    setTasks((current) => current.map((task) => task.id === id ? { ...task, completed: !task.completed, status: !task.completed ? "done" : "todo" } : task));
-    setToast(target?.completed ? "Task restored" : "One step closer. Task complete.");
+    if (!target) return;
+    const completing = !target.completed;
+    setTasks((current) => {
+      const updated = current.map((task) => task.id === id ? {
+        ...task,
+        completed: completing,
+        status: completing ? "done" as TaskStatus : "todo" as TaskStatus,
+        completedAt: completing ? new Date().toISOString() : undefined,
+      } : task);
+      if (!completing || !target.recurrence || target.recurrence === "none") return updated;
+      const nextTask: Task = {
+        ...target,
+        id: Date.now(),
+        due: nextRecurringDue(target),
+        status: "todo",
+        completed: false,
+        completedAt: undefined,
+        createdAt: new Date().toISOString(),
+        subtasks: (target.subtasks ?? []).map((subtask) => ({ ...subtask, id: Date.now() + subtask.id, completed: false })),
+      };
+      return [nextTask, ...updated];
+    });
+    setToast(target.completed ? "Task restored" : target.recurrence && target.recurrence !== "none" ? `Complete · next ${recurrenceLabel(target.recurrence).toLowerCase()} occurrence created` : "One step closer. Task complete.");
   }
 
   function deleteTask(id: number) {
@@ -967,7 +1140,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     { view: "today", label: "Today", icon: LayoutDashboard, count: openTasks.filter((task) => task.due === "Today").length },
     { view: "inbox", label: "Inbox", icon: Inbox, count: openTasks.length },
     { view: "upcoming", label: "Upcoming", icon: CalendarDays },
+    { view: "planner", label: "Planner", icon: Clock3 },
     { view: "board", label: "Board", icon: KanbanSquare },
+    { view: "filtersLabels", label: "Filters & Labels", icon: ListFilter },
     { view: "analytics", label: "Insights", icon: BarChart3 },
     { view: "timerHistory", label: "Timer History", icon: Clock3, count: focusHistory.length },
     { view: "completed", label: "Completed", icon: CheckCircle2, count: completedCount },
@@ -1077,6 +1252,18 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             </div>
           </section>
 
+          {activeView !== "timerHistory" && (
+            <form className="quick-capture" onSubmit={addQuickTask}>
+              <span className="quick-capture-icon"><Sparkles size={18} /></span>
+              <div className="quick-capture-field">
+                <input id="orbit-quick-add" value={quickAdd} onChange={(event) => setQuickAdd(event.target.value)} placeholder="Quick add: Prepare report tomorrow 2pm p1 @client 45m #stakeholder-comms" aria-label="Quick add a task with natural language" />
+                <small>Use today/tomorrow, p1–p4, @labels, 30m/2h, every week, and #project-name</small>
+              </div>
+              <kbd>⌘K</kbd>
+              <button type="submit" disabled={!quickAdd.trim()}><Plus size={16} /> Add</button>
+            </form>
+          )}
+
           {taskFiltersVisible && (
             <TaskFilterBar
               tasks={tasks}
@@ -1085,6 +1272,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               project={projectFilter}
               status={statusFilter}
               due={dueFilter}
+              label={labelFilter}
               resultCount={viewTaskCount}
               totalCount={totalViewTaskCount}
               activeCount={activeFilterCount}
@@ -1093,6 +1281,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               onProjectChange={setProjectFilter}
               onStatusChange={setStatusFilter}
               onDueChange={setDueFilter}
+              onLabelChange={setLabelFilter}
               onClear={clearTaskFilters}
             />
           )}
@@ -1112,8 +1301,10 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               onScheduleChange={updateTodaySchedule}
             />
           )}
-          {activeView === "board" && <BoardView tasks={visibleTasks} onMove={moveTask} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "board" && <BoardView tasks={visibleTasks} onAdd={openNewTask} onMove={moveTask} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "upcoming" && <UpcomingView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "planner" && <PlannerView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "filtersLabels" && <FiltersLabelsView tasks={tasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "inbox" && <ListView tasks={visibleTasks.filter((task) => !task.completed)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "completed" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
@@ -1136,11 +1327,24 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             <div className="form-grid">
               <label className="field-label">Project<select value={draft.project} onChange={(event) => setDraft({ ...draft, project: event.target.value })}>{projects.map((project) => <option key={project.id}>{project.name}</option>)}</select></label>
               <label className="field-label">Priority<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Priority })}><option>Very High</option><option>High</option><option>Medium</option><option>Low</option></select></label>
-              <label className="field-label">Due<select value={draft.due} onChange={(event) => setDraft({ ...draft, due: event.target.value })}><option>Today</option><option>Tomorrow</option><option>Friday</option><option>Monday</option><option>Someday</option></select></label>
+              <label className="field-label">Due<select value={draft.due} onChange={(event) => setDraft({ ...draft, due: event.target.value })}><option>Today</option><option>Tomorrow</option><option>Friday</option><option>Monday</option><option>Next week</option><option>Next month</option><option>Someday</option></select></label>
               <label className="field-label">Time<input value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label>
               <label className="field-label">Estimate<select value={draft.duration} onChange={(event) => setDraft({ ...draft, duration: Number(event.target.value) })}><option value={15}>15 minutes</option><option value={30}>30 minutes</option><option value={45}>45 minutes</option><option value={60}>1 hour</option><option value={90}>1.5 hours</option><option value={120}>2 hours</option></select></label>
+              <label className="field-label">Repeat<select value={draft.recurrence} onChange={(event) => setDraft({ ...draft, recurrence: event.target.value as Recurrence })}><option value="none">Does not repeat</option><option value="daily">Every day</option><option value="weekdays">Every weekday</option><option value="weekly">Every week</option><option value="monthly">Every month</option></select></label>
             </div>
+            <label className="field-label">Labels<input value={draft.labels.join(", ")} onChange={(event) => setDraft({ ...draft, labels: event.target.value.split(",") })} placeholder="client, qa, waiting" /></label>
             <label className="field-label">Notes<textarea value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} placeholder="Add helpful context…" rows={3} /></label>
+            <div className="subtask-editor">
+              <div className="subtask-editor-heading"><div><strong>Subtasks</strong><small>{draft.subtasks.filter((subtask) => subtask.completed).length} of {draft.subtasks.length} complete</small></div></div>
+              {draft.subtasks.map((subtask) => (
+                <div className="subtask-edit-row" key={subtask.id}>
+                  <button type="button" className={subtask.completed ? "round-check checked" : "round-check"} onClick={() => setDraft((current) => ({ ...current, subtasks: current.subtasks.map((item) => item.id === subtask.id ? { ...item, completed: !item.completed } : item) }))}>{subtask.completed && <Check size={12} />}</button>
+                  <span className={subtask.completed ? "completed" : ""}>{subtask.title}</span>
+                  <button type="button" className="subtask-remove" onClick={() => setDraft((current) => ({ ...current, subtasks: current.subtasks.filter((item) => item.id !== subtask.id) }))} aria-label={`Remove ${subtask.title}`}><X size={14} /></button>
+                </div>
+              ))}
+              <div className="subtask-add-row"><input value={subtaskInput} onChange={(event) => setSubtaskInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addDraftSubtask(); } }} placeholder="Add a smaller next step" /><button type="button" onClick={addDraftSubtask} disabled={!subtaskInput.trim()}><Plus size={15} /> Add</button></div>
+            </div>
             <div className="modal-actions">
               {editingTask && <button className="delete-button" type="button" onClick={() => deleteTask(editingTask.id)}><Trash2 size={16} /> Delete</button>}
               <span />
@@ -1253,13 +1457,14 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   );
 }
 
-function TaskFilterBar({ tasks, projects, priority, project, status, due, resultCount, totalCount, activeCount, showProjectFilter, onPriorityChange, onProjectChange, onStatusChange, onDueChange, onClear }: {
+function TaskFilterBar({ tasks, projects, priority, project, status, due, label, resultCount, totalCount, activeCount, showProjectFilter, onPriorityChange, onProjectChange, onStatusChange, onDueChange, onLabelChange, onClear }: {
   tasks: Task[];
   projects: Project[];
   priority: "All" | Priority;
   project: string;
   status: StatusFilter;
   due: string;
+  label: string;
   resultCount: number;
   totalCount: number;
   activeCount: number;
@@ -1268,9 +1473,11 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, result
   onProjectChange: (value: string) => void;
   onStatusChange: (value: StatusFilter) => void;
   onDueChange: (value: string) => void;
+  onLabelChange: (value: string) => void;
   onClear: () => void;
 }) {
   const dueOptions = Array.from(new Set(tasks.map((task) => task.due)));
+  const labelOptions = Array.from(new Set(tasks.flatMap((task) => task.labels ?? []))).sort();
 
   return (
     <section className="task-filter-bar" aria-label="Task filters">
@@ -1313,6 +1520,13 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, result
           <select value={due} onChange={(event) => onDueChange(event.target.value)}>
             <option value="All">Any date</option>
             {dueOptions.map((item) => <option value={item} key={item}>{item}</option>)}
+          </select>
+        </label>
+        <label className="task-filter-control">
+          <span>Label</span>
+          <select value={label} onChange={(event) => onLabelChange(event.target.value)}>
+            <option value="All">All labels</option>
+            {labelOptions.map((item) => <option value={item} key={item}>@{item}</option>)}
           </select>
         </label>
       </div>
@@ -1441,7 +1655,7 @@ function PriorityCard({ task, index, onToggle, onEdit, onFocus }: { task: Task; 
   );
 }
 
-function BoardView({ tasks, onMove, onToggle, onEdit, onFocus }: { tasks: Task[]; onMove: (id: number, status: TaskStatus) => void; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
+function BoardView({ tasks, onAdd, onMove, onToggle, onEdit, onFocus }: { tasks: Task[]; onAdd: () => void; onMove: (id: number, status: TaskStatus) => void; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
   const columns: { status: TaskStatus; title: string; color: string }[] = [
     { status: "todo", title: "To do", color: "#2457ff" },
     { status: "in-progress", title: "In progress", color: "#c9ff3d" },
@@ -1453,7 +1667,7 @@ function BoardView({ tasks, onMove, onToggle, onEdit, onFocus }: { tasks: Task[]
         const columnTasks = tasks.filter((task) => task.status === column.status);
         return (
           <div className="board-column" key={column.status} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onMove(Number(event.dataTransfer.getData("task-id")), column.status)}>
-            <div className="board-column-heading"><div><i style={{ background: column.color }} /><h2>{column.title}</h2><span>{columnTasks.length}</span></div><button><Plus size={17} /></button></div>
+            <div className="board-column-heading"><div><i style={{ background: column.color }} /><h2>{column.title}</h2><span>{columnTasks.length}</span></div><button type="button" onClick={onAdd} aria-label={`Add task to ${column.title}`}><Plus size={17} /></button></div>
             <div className="board-list">
               {columnTasks.map((task) => (
                 <article className="board-task" key={task.id} draggable onDragStart={(event) => event.dataTransfer.setData("task-id", String(task.id))}>
@@ -1473,7 +1687,8 @@ function BoardView({ tasks, onMove, onToggle, onEdit, onFocus }: { tasks: Task[]
 }
 
 function UpcomingView({ tasks, projects, onToggle, onEdit, onFocus }: { tasks: Task[]; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
-  const days = ["Today", "Tomorrow", "Friday", "Monday", "Someday"];
+  const preferredOrder = ["Today", "Tomorrow", "Friday", "Monday", "Next week", "Next month", "Someday"];
+  const days = [...preferredOrder.filter((day) => tasks.some((task) => task.due === day)), ...Array.from(new Set(tasks.map((task) => task.due))).filter((day) => !preferredOrder.includes(day))];
   return <section className="timeline-list">{days.map((day, dayIndex) => {
     const dayTasks = tasks.filter((task) => task.due === day && !task.completed);
     if (!dayTasks.length) return null;
@@ -1481,12 +1696,86 @@ function UpcomingView({ tasks, projects, onToggle, onEdit, onFocus }: { tasks: T
   })}</section>;
 }
 
+function PlannerView({ tasks, projects, onToggle, onEdit, onFocus }: { tasks: Task[]; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
+  const capacity = 480;
+  const dueOrder = ["Today", "Tomorrow", "Friday", "Monday", "Next week", "Next month", "Someday"];
+  const openTasks = tasks.filter((task) => !task.completed);
+  const buckets = [...dueOrder, ...Array.from(new Set(openTasks.map((task) => task.due))).filter((day) => !dueOrder.includes(day))]
+    .map((day) => {
+      const dayTasks = openTasks.filter((task) => task.due === day);
+      return { day, tasks: dayTasks, minutes: dayTasks.reduce((total, task) => total + task.duration, 0) };
+    })
+    .filter((bucket) => bucket.tasks.length);
+  const overloaded = buckets.filter((bucket) => bucket.minutes > capacity).length;
+  const plannedMinutes = openTasks.reduce((total, task) => total + task.duration, 0);
+
+  return (
+    <div className="planner-view">
+      <section className="planner-summary">
+        <article><span className="stat-icon blue"><Clock3 size={20} /></span><div><strong>{formatDuration(plannedMinutes)}</strong><small>Planned effort</small></div></article>
+        <article><span className="stat-icon lime"><CalendarDays size={20} /></span><div><strong>{buckets.length}</strong><small>Active time buckets</small></div></article>
+        <article><span className="stat-icon blue"><Target size={20} /></span><div><strong>{overloaded}</strong><small>Over-capacity days</small></div></article>
+      </section>
+      <section className="capacity-board">
+        <div className="capacity-board-heading"><div><p className="eyebrow">Workload planner</p><h2>Capacity by day</h2></div><span>Daily guide: {formatDuration(capacity)}</span></div>
+        {buckets.length ? buckets.map((bucket) => {
+          const percent = Math.round((bucket.minutes / capacity) * 100);
+          const over = bucket.minutes > capacity;
+          return (
+            <article className={over ? "capacity-day overloaded" : "capacity-day"} key={bucket.day}>
+              <div className="capacity-day-header"><div><strong>{bucket.day}</strong><small>{bucket.tasks.length} tasks</small></div><span>{formatDuration(bucket.minutes)} {over ? `· ${formatDuration(bucket.minutes - capacity)} over` : "planned"}</span></div>
+              <div className="capacity-meter" aria-label={`${bucket.day} is ${percent}% of suggested capacity`}><span style={{ width: `${Math.min(percent, 100)}%` }} /></div>
+              <div className="capacity-task-list">{bucket.tasks.map((task) => <TaskRow key={task.id} task={task} projects={projects} onToggle={onToggle} onEdit={onEdit} onFocus={onFocus} />)}</div>
+            </article>
+          );
+        }) : <div className="empty-list"><CheckCircle2 size={32} /><h3>Your plan is clear</h3><p>Add tasks to see effort and capacity across the week.</p></div>}
+      </section>
+    </div>
+  );
+}
+
+function FiltersLabelsView({ tasks, projects, onToggle, onEdit, onFocus }: { tasks: Task[]; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
+  const [selected, setSelected] = useState("priority");
+  const smartFilters = [
+    { id: "priority", name: "Priority radar", description: "Very High and High priority work", test: (task: Task) => !task.completed && (task.priority === "Very High" || task.priority === "High") },
+    { id: "quick", name: "Quick wins", description: "Tasks that need 30 minutes or less", test: (task: Task) => !task.completed && task.duration <= 30 },
+    { id: "deep", name: "Deep work", description: "Tasks estimated at 90 minutes or more", test: (task: Task) => !task.completed && task.duration >= 90 },
+    { id: "recurring", name: "Recurring", description: "Routines that automatically return", test: (task: Task) => !task.completed && Boolean(task.recurrence && task.recurrence !== "none") },
+    { id: "in-progress", name: "In progress", description: "Work already moving", test: (task: Task) => !task.completed && task.status === "in-progress" },
+    { id: "someday", name: "Someday", description: "Ideas without a near-term commitment", test: (task: Task) => !task.completed && task.due === "Someday" },
+  ];
+  const labels = Array.from(new Set(tasks.flatMap((task) => task.labels ?? []))).sort();
+  const activeSmartFilter = smartFilters.find((filter) => filter.id === selected);
+  const selectedLabel = selected.startsWith("label:") ? selected.slice(6) : null;
+  const selectedTasks = selectedLabel
+    ? tasks.filter((task) => !task.completed && (task.labels ?? []).includes(selectedLabel))
+    : activeSmartFilter ? tasks.filter(activeSmartFilter.test) : [];
+  const selectedTitle = selectedLabel ? `@${selectedLabel}` : activeSmartFilter?.name ?? "Smart filter";
+
+  return (
+    <div className="filters-labels-view">
+      <section className="smart-filter-grid">
+        {smartFilters.map((filter, index) => {
+          const count = tasks.filter(filter.test).length;
+          return <button type="button" className={selected === filter.id ? "smart-filter-card active" : "smart-filter-card"} key={filter.id} onClick={() => setSelected(filter.id)}><span className={`smart-filter-symbol symbol-${index % 3}`}><ListFilter size={18} /></span><strong>{filter.name}</strong><p>{filter.description}</p><em>{count} tasks</em></button>;
+        })}
+      </section>
+      <section className="labels-panel">
+        <div><p className="eyebrow">Reusable context</p><h2>Labels</h2><span>{labels.length} labels across your workspace</span></div>
+        <div className="labels-cloud">{labels.length ? labels.map((label) => <button type="button" className={selected === `label:${label}` ? "active" : ""} onClick={() => setSelected(`label:${label}`)} key={label}>@{label}<span>{tasks.filter((task) => (task.labels ?? []).includes(label)).length}</span></button>) : <p>Add comma-separated labels when creating or editing a task.</p>}</div>
+      </section>
+      <ListView tasks={selectedTasks} projects={projects} title={selectedTitle} onToggle={onToggle} onEdit={onEdit} onFocus={onFocus} empty="No open tasks match this smart view." />
+    </div>
+  );
+}
+
 function ListView({ tasks, projects, title, onToggle, onEdit, onFocus, empty = "No tasks match this view." }: { tasks: Task[]; projects: Project[]; title: string; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void; empty?: string }) {
   return <section className="list-card"><div className="list-card-header"><div><p className="eyebrow">{tasks.length} tasks</p><h2>{title}</h2></div></div>{tasks.length ? <div className="task-list">{tasks.map((task) => <TaskRow key={task.id} task={task} projects={projects} onToggle={onToggle} onEdit={onEdit} onFocus={onFocus} />)}</div> : <div className="empty-list"><CheckCircle2 size={32} /><h3>All clear</h3><p>{empty}</p></div>}</section>;
 }
 
 function TaskRow({ task, projects, onToggle, onEdit, onFocus }: { task: Task; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
-  return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={`Toggle ${task.title}`}>{task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}</h3><div><span><span className="project-dot" style={{ background: projects.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.due}</span><span><Clock3 size={13} />{task.time}</span></div></div><span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span><TaskActions task={task} onEdit={onEdit} onFocus={onFocus} /></article>;
+  const subtasks = subtaskProgress(task);
+  return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={`Toggle ${task.title}`}>{task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}</h3><div><span><span className="project-dot" style={{ background: projects.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.completed ? `Completed ${formatCompletedAt(task.completedAt)}` : task.due}</span><span><Clock3 size={13} />{task.time}</span>{task.recurrence && task.recurrence !== "none" && <span><RotateCcw size={13} />{recurrenceLabel(task.recurrence)}</span>}{subtasks.total > 0 && <span><Rows3 size={13} />{subtasks.completed}/{subtasks.total} steps</span>}</div>{Boolean(task.labels?.length) && <div className="task-labels">{task.labels?.slice(0, 4).map((label) => <em key={label}>@{label}</em>)}</div>}</div><span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span><TaskActions task={task} onEdit={onEdit} onFocus={onFocus} /></article>;
 }
 
 function TaskActions({ task, onEdit, onFocus }: { task: Task; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
