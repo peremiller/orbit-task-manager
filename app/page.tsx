@@ -32,15 +32,17 @@ import {
   Sparkles,
   Star,
   Sun,
+  Tag,
   Target,
   Trash2,
   TrendingUp,
+  Trophy,
   X,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   DEFAULT_FOCUS_SECONDS,
   DEFAULT_FOCUS_TIMER,
@@ -55,6 +57,7 @@ import {
   type FocusHistoryEntry,
   type FocusTimerState,
 } from "@/lib/focus-timer";
+import { computeKarma, clampDailyGoal, KARMA_LEVELS, type KarmaStats } from "@/lib/karma";
 import { filterTasks } from "@/lib/task-filters";
 import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-recovery";
 
@@ -296,6 +299,58 @@ function parseQuickTask(input: string, projects: Project[], defaultProject: stri
   };
 }
 
+type DetectedToken = { kind: string; text: string };
+
+// Mirrors parseQuickTask's grammar, but reports only what the text actually
+// contains so the quick-capture bar can preview real detections (not defaults).
+function detectQuickTokens(input: string, projects: Project[]): DetectedToken[] {
+  const text = input.trim();
+  if (!text) return [];
+  const tokens: DetectedToken[] = [];
+
+  for (const candidate of [...projects].sort((a, b) => b.name.length - a.name.length)) {
+    if (new RegExp(`(^|\\s)#${projectSlug(candidate.name)}(?=\\s|$)`, "i").test(text)) {
+      tokens.push({ kind: "project", text: candidate.name });
+      break;
+    }
+  }
+
+  for (const label of normalizeLabels(Array.from(text.matchAll(/(?:^|\s)@([a-z0-9-]+)/gi), (match) => match[1]))) {
+    tokens.push({ kind: "label", text: `@${label}` });
+  }
+
+  const priorityMatch = text.match(/\bp([1-4])\b/i);
+  const priorityMap: Record<string, Priority> = { "1": "Very High", "2": "High", "3": "Medium", "4": "Low" };
+  if (priorityMatch) tokens.push({ kind: "priority", text: priorityMap[priorityMatch[1]] });
+
+  const recurrencePatterns: [RegExp, string][] = [
+    [/\bevery weekdays?\b/i, "Every weekday"],
+    [/\bevery day\b/i, "Daily"],
+    [/\bevery weeks?\b/i, "Weekly"],
+    [/\bevery months?\b/i, "Monthly"],
+  ];
+  for (const [pattern, value] of recurrencePatterns) {
+    if (pattern.test(text)) {
+      tokens.push({ kind: "recurring", text: value });
+      break;
+    }
+  }
+
+  const due = ["Next month", "Next week", "Tomorrow", "Today", "Friday", "Monday", "Someday"]
+    .find((option) => new RegExp(`\\b${option}\\b`, "i").test(text));
+  if (due) tokens.push({ kind: "due", text: due });
+
+  const timeMatch = text.match(/\b(?:1[0-2]|0?[1-9])(?::[0-5]\d)?\s?(?:am|pm)\b/i);
+  if (timeMatch) tokens.push({ kind: "time", text: timeMatch[0].replace(/\s+/g, " ").toUpperCase() });
+
+  const durationMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(m|min|mins|h|hr|hrs)\b/i);
+  if (durationMatch) {
+    tokens.push({ kind: "duration", text: formatDuration(Math.max(5, Math.round(Number(durationMatch[1]) * (/^h/i.test(durationMatch[2]) ? 60 : 1)))) });
+  }
+
+  return tokens;
+}
+
 function formatDuration(minutes: number) {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
@@ -413,6 +468,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [focusHistory, setFocusHistory] = useState<FocusHistoryEntry[]>([]);
   const [clockNow, setClockNow] = useState(() => Date.now());
   const [toast, setToast] = useState("");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [dailyGoal, setDailyGoal] = useState(5);
   const [showSearch, setShowSearch] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [localDateLabel, setLocalDateLabel] = useState("");
@@ -655,6 +712,19 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   }, [focusHistory, focusTimer, projects, sessionUser, syncRetry, tasks, todaySchedule]);
 
   useEffect(() => {
+    if (!sessionUser) return;
+    const user = sessionUser;
+    const loadGoal = window.setTimeout(() => {
+      try {
+        setDailyGoal(clampDailyGoal(window.localStorage.getItem(`orbit-daily-goal-v1:${user.id}`)));
+      } catch {
+        // Keep the default goal when browser storage is unavailable.
+      }
+    }, 0);
+    return () => window.clearTimeout(loadGoal);
+  }, [sessionUser]);
+
+  useEffect(() => {
     const loadTheme = window.setTimeout(() => {
       setTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
     }, 0);
@@ -765,13 +835,19 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+        return;
+      }
       const target = event.target as HTMLElement;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       if (event.key.toLowerCase() === "q") {
+        event.preventDefault();
         const defaultProject = projects.find((project) => project.id === activeProjectId)?.name ?? projects[0]?.name ?? "";
         setEditingTask(null);
         setDraft({ ...emptyDraft, project: defaultProject });
-        setTaskModalOpen(true);
+        window.setTimeout(() => setTaskModalOpen(true), 0);
       }
       if (event.key.toLowerCase() === "f") {
         if (focusTimer.status !== "idle") {
@@ -788,11 +864,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         setShowSearch(true);
         window.setTimeout(() => document.getElementById("orbit-search")?.focus(), 50);
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        document.getElementById("orbit-quick-add")?.focus();
-      }
       if (event.key === "Escape") {
+        setPaletteOpen(false);
         setTaskModalOpen(false);
         setProjectModalOpen(false);
         setProjectCreateError("");
@@ -806,6 +879,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
   }, [activeProjectId, focusTimer.status, projects, tasks]);
+
+  const karma = useMemo(() => computeKarma(tasks, dailyGoal, new Date(clockNow)), [clockNow, dailyGoal, tasks]);
 
   const visibleTasks = useMemo(() => {
     return filterTasks(tasks, { search, priority: priorityFilter, project: projectFilter, status: statusFilter, due: dueFilter, label: labelFilter });
@@ -839,6 +914,18 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         : activeView === "completed"
           ? tasks.filter((task) => task.completed).length
           : tasks.length;
+
+  function updateDailyGoal(value: number) {
+    const goal = clampDailyGoal(value);
+    setDailyGoal(goal);
+    if (sessionUser) {
+      try {
+        window.localStorage.setItem(`orbit-daily-goal-v1:${sessionUser.id}`, String(goal));
+      } catch {
+        // The goal still applies for this session.
+      }
+    }
+  }
 
   function clearTaskFilters() {
     setSearch("");
@@ -880,13 +967,12 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     setTaskModalOpen(true);
   }
 
-  function addQuickTask(event: FormEvent) {
-    event.preventDefault();
+  function createQuickTask(text: string) {
     const defaultProject = projects.find((project) => project.id === activeProjectId)?.name ?? projects[0]?.name ?? "";
-    const parsed = parseQuickTask(quickAdd, projects, defaultProject);
+    const parsed = parseQuickTask(text, projects, defaultProject);
     if (!parsed.title) {
       setToast("Add a task name before the details");
-      return;
+      return false;
     }
     const task: Task = {
       ...parsed,
@@ -896,8 +982,13 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       createdAt: new Date().toISOString(),
     };
     setTasks((current) => [task, ...current]);
-    setQuickAdd("");
     setToast(`${task.title} added · ${task.due}${task.recurrence !== "none" ? ` · ${recurrenceLabel(task.recurrence)}` : ""}`);
+    return true;
+  }
+
+  function addQuickTask(event: FormEvent) {
+    event.preventDefault();
+    if (createQuickTask(quickAdd)) setQuickAdd("");
   }
 
   function openNewProject() {
@@ -1257,7 +1348,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               <span className="quick-capture-icon"><Sparkles size={18} /></span>
               <div className="quick-capture-field">
                 <input id="orbit-quick-add" value={quickAdd} onChange={(event) => setQuickAdd(event.target.value)} placeholder="Quick add: Prepare report tomorrow 2pm p1 @client 45m #stakeholder-comms" aria-label="Quick add a task with natural language" />
-                <small>Use today/tomorrow, p1–p4, @labels, 30m/2h, every week, and #project-name</small>
+                <QuickAddPreview input={quickAdd} projects={projects} />
               </div>
               <kbd>⌘K</kbd>
               <button type="submit" disabled={!quickAdd.trim()}><Plus size={16} /> Add</button>
@@ -1288,6 +1379,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
           {activeView === "today" && (
             <TodayView
+              streak={karma.streak}
+              todayCount={karma.todayCount}
+              dailyGoal={dailyGoal}
               tasks={visibleTasks}
               openTasks={filteredOpenTasks}
               priorities={priorities}
@@ -1310,7 +1404,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           {activeView === "projects" && (activeProject
             ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="This project is ready for its first task." />
             : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} />)}
-          {activeView === "analytics" && <AnalyticsView tasks={tasks} focusHistory={focusHistory} />}
+          {activeView === "analytics" && <AnalyticsView tasks={tasks} focusHistory={focusHistory} karma={karma} dailyGoal={dailyGoal} onGoalChange={updateDailyGoal} />}
           {activeView === "timerHistory" && <TimerHistoryView focusHistory={focusHistory} search={search} now={clockNow} />}
         </div>
       </main>
@@ -1452,6 +1546,21 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         </div>
       )}
 
+      {paletteOpen && (
+        <CommandPalette
+          onClose={() => setPaletteOpen(false)}
+          onQuickAdd={createQuickTask}
+          commands={[
+            { id: "new-task", title: "New task", hint: "Open the full task form", icon: Plus, keywords: "add create task", run: openNewTask },
+            { id: "new-project", title: "New project", hint: "Start a new outcome", icon: Folder, keywords: "add create project", run: openNewProject },
+            { id: "focus", title: "Start focus session", hint: "25 minutes of deep work", icon: Zap, keywords: "timer pomodoro deep work", run: openFocusPicker },
+            { id: "theme", title: `Switch to ${theme === "dark" ? "light" : "dark"} mode`, hint: "Toggle the theme", icon: theme === "dark" ? Sun : Moon, keywords: "theme dark light appearance", run: toggleTheme },
+            ...navItems.map((item) => ({ id: `view-${item.view}`, title: `Go to ${item.label}`, hint: "View", icon: item.icon, keywords: `view navigate ${item.label}`, run: () => navigate(item.view) })),
+            ...projects.map((project) => ({ id: `project-${project.id}`, title: project.name, hint: "Open project", icon: Folder, keywords: `project open ${project.name}`, run: () => navigateProject(project) })),
+          ]}
+        />
+      )}
+
       {toast && <div className="toast"><CheckCircle2 size={18} />{toast}</div>}
     </div>
   );
@@ -1535,7 +1644,7 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, label,
   );
 }
 
-function TodayView({ tasks, openTasks, priorities, progress, completedCount, schedule, onAdd, onToggle, onEdit, onFocus, onScheduleChange }: { tasks: Task[]; openTasks: Task[]; priorities: Task[]; progress: number; completedCount: number; schedule: ScheduleWindow; onAdd: () => void; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void; onScheduleChange: (schedule: ScheduleWindow) => void }) {
+function TodayView({ tasks, openTasks, priorities, progress, completedCount, schedule, streak, todayCount, dailyGoal, onAdd, onToggle, onEdit, onFocus, onScheduleChange }: { tasks: Task[]; openTasks: Task[]; priorities: Task[]; progress: number; completedCount: number; schedule: ScheduleWindow; streak: number; todayCount: number; dailyGoal: number; onAdd: () => void; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void; onScheduleChange: (schedule: ScheduleWindow) => void }) {
   const featured = tasks.filter((task) => !task.completed && task.due === "Today").slice(0, 3);
   const planRef = useRef<HTMLDivElement>(null);
   const [planHighlighted, setPlanHighlighted] = useState(false);
@@ -1604,6 +1713,7 @@ function TodayView({ tasks, openTasks, priorities, progress, completedCount, sch
       <section className="summary-row">
         <div className="summary-item"><span className="metric-icon blue"><CheckCircle2 size={22} /></span><div><strong>{openTasks.length}</strong><small>open tasks</small></div></div>
         <div className="summary-item"><span className="metric-icon lime"><Star size={21} /></span><div><strong>{priorities.length}</strong><small>priorities</small></div></div>
+        <div className="summary-item" title={`${todayCount} of ${dailyGoal} tasks completed today`}><span className="metric-icon flame"><Flame size={21} /></span><div><strong>{streak}</strong><small>day streak</small></div></div>
         <div className="progress-summary"><div><span>Today&apos;s progress</span><strong>{progress}%</strong></div><div className="segmented-progress">{Array.from({ length: 8 }).map((_, index) => <span key={index} className={index < Math.round(progress / 12.5) ? "filled" : ""} />)}</div><small>{completedCount} completed · momentum is building</small></div>
         <button className="quick-add" onClick={onAdd}><Plus size={21} /> Add task</button>
       </section>
@@ -1878,8 +1988,9 @@ function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenam
   );
 }
 
-function AnalyticsView({ tasks, focusHistory }: { tasks: Task[]; focusHistory: FocusHistoryEntry[] }) {
+function AnalyticsView({ tasks, focusHistory, karma, dailyGoal, onGoalChange }: { tasks: Task[]; focusHistory: FocusHistoryEntry[]; karma: KarmaStats; dailyGoal: number; onGoalChange: (value: number) => void }) {
   const completed = tasks.filter((task) => task.completed).length;
+  const maxWeekCount = Math.max(1, ...karma.week.map((day) => day.count));
   const completedFocusSessions = focusHistory.filter((entry) => entry.status === "completed");
   const totalFocusSeconds = completedFocusSessions.reduce((total, entry) => total + entry.durationSeconds, 0);
   const todayKey = new Date().toDateString();
@@ -1890,7 +2001,34 @@ function AnalyticsView({ tasks, focusHistory }: { tasks: Task[]; focusHistory: F
       <article className="analytics-hero"><div><p className="eyebrow">Tracked focus time</p><h2>{formatDuration(Math.round(totalFocusSeconds / 60))}</h2><span className="positive"><TrendingUp size={15} /> {completedFocusSessions.length} completed sessions</span></div><div className="score-orbit"><span>{completedFocusSessions.length}</span><i /></div></article>
       <article className="stat-card"><span className="stat-icon lime"><Flame size={20} /></span><div><strong>{formatDuration(Math.round(todayFocusSeconds / 60))}</strong><span>Focused today</span></div></article>
       <article className="stat-card"><span className="stat-icon blue"><CheckCircle2 size={20} /></span><div><strong>{completed}</strong><span>Tasks completed</span></div></article>
-      <article className="chart-card"><div className="card-title-row"><div><p className="eyebrow">Completion rhythm</p><h3>This week</h3></div><span className="positive">Keep building</span></div><div className="bar-chart">{[36, 58, 44, 78, 64, 88, 54].map((height, index) => <div key={index}><span style={{ height: `${height}%` }} className={index === 5 ? "active" : ""} /><small>{["M", "T", "W", "T", "F", "S", "S"][index]}</small></div>)}</div></article>
+      <article className="chart-card">
+        <div className="card-title-row"><div><p className="eyebrow">Completion rhythm</p><h3>This week</h3></div><span className="positive">{karma.week.reduce((total, day) => total + day.count, 0)} done in 7 days</span></div>
+        <div className="bar-chart real">
+          {karma.week.map((day) => (
+            <div key={day.date} title={`${day.count} task${day.count === 1 ? "" : "s"} on ${day.date}${day.goalMet ? " — goal met" : ""}`}>
+              <span style={{ height: `${Math.max(6, Math.round((day.count / maxWeekCount) * 100))}%` }} className={day.isToday ? "active" : day.goalMet ? "goal-met" : ""} />
+              <small>{day.label}</small>
+            </div>
+          ))}
+        </div>
+      </article>
+      <article className="karma-card">
+        <div className="card-title-row"><div><p className="eyebrow">Productivity karma</p><h3>{karma.level}</h3></div><span className="karma-badge"><Trophy size={15} /> {karma.karma.toLocaleString()} pts</span></div>
+        <div className={karma.goalMetToday ? "karma-progress goal-met" : "karma-progress"}>
+          <div><span>{karma.nextLevel ? `Next: ${karma.nextLevel}` : "Top rank reached"}</span><strong>{karma.levelProgress}%</strong></div>
+          <i><span style={{ width: `${karma.levelProgress}%` }} /></i>
+        </div>
+        <div className="karma-meta">
+          <span><Flame size={15} /> {karma.streak}-day streak</span>
+          <span><CheckCircle2 size={15} /> {karma.todayCount}/{dailyGoal} today{karma.goalMetToday ? " · goal met" : ""}</span>
+          <label>Daily goal
+            <select value={dailyGoal} onChange={(event) => onGoalChange(Number(event.target.value))} aria-label="Daily task goal">
+              {[3, 5, 8, 10, 15, 20].map((option) => <option value={option} key={option}>{option} tasks</option>)}
+            </select>
+          </label>
+        </div>
+        <p className="karma-levels">{KARMA_LEVELS.map((level) => level.name).join(" · ")}</p>
+      </article>
       <article className="insight-card"><span className="stat-icon blue"><Sparkles size={20} /></span><p className="eyebrow">Orbit insight</p><h3>Your best work happens before noon.</h3><p>Use the balanced 10-hour plan to protect focused work, meetings, and review time without crowding the day.</p><button>Plan a focus block <ArrowRight size={15} /></button></article>
       <article className="focus-history-card">
         <div className="card-title-row"><div><p className="eyebrow">Timer tracking</p><h3>Focus history</h3></div><Link className="history-link" href="/timer-history">View all <ArrowRight size={14} /></Link></div>
@@ -2002,4 +2140,117 @@ function TimerHistoryView({ focusHistory, search, now }: { focusHistory: FocusHi
 
 function EmptyState({ onAdd }: { onAdd: () => void }) {
   return <div className="priority-empty"><Target size={28} /><h3>Your orbit is clear</h3><p>Add a priority to begin.</p><button onClick={onAdd}><Plus size={16} /> Add task</button></div>;
+}
+
+function QuickAddPreview({ input, projects }: { input: string; projects: Project[] }) {
+  const tokens = useMemo(() => detectQuickTokens(input, projects), [input, projects]);
+  const icons: Record<string, typeof Tag> = {
+    project: Folder, label: Tag, priority: Star, recurring: RotateCcw, due: CalendarDays, time: Clock3, duration: Clock3,
+  };
+
+  if (!tokens.length) {
+    return <small>Use today/tomorrow, p1–p4, @labels, 30m/2h, every week, and #project-name</small>;
+  }
+  return (
+    <div className="quickadd-chips" aria-live="polite">
+      <span className="quickadd-chips-label"><Sparkles size={13} /> Detected:</span>
+      {tokens.map((token) => {
+        const Icon = icons[token.kind] ?? Tag;
+        return <span className={`quickadd-chip ${token.kind}`} key={`${token.kind}-${token.text}`}><Icon size={12} />{token.text}</span>;
+      })}
+    </div>
+  );
+}
+
+type PaletteCommand = {
+  id: string;
+  title: string;
+  hint: string;
+  icon: typeof LayoutDashboard;
+  keywords: string;
+  run: () => void;
+};
+
+function CommandPalette({ commands, onQuickAdd, onClose }: { commands: PaletteCommand[]; onQuickAdd: (text: string) => boolean; onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const matches = useMemo(() => {
+    const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const filtered = terms.length
+      ? commands.filter((command) => terms.every((term) => `${command.title} ${command.hint} ${command.keywords}`.toLowerCase().includes(term)))
+      : commands;
+    const trimmed = query.trim();
+    if (!trimmed) return filtered;
+    // Typing free text always offers capture, so Cmd+K stays a one-stop entry point.
+    const capture: PaletteCommand = {
+      id: "quick-add",
+      title: `Add task: ${trimmed}`,
+      hint: "Parses dates, p1–p4, @labels, #project",
+      icon: Sparkles,
+      keywords: "",
+      run: () => onQuickAdd(trimmed),
+    };
+    return [capture, ...filtered];
+  }, [commands, onQuickAdd, query]);
+
+  const highlightIndex = Math.min(activeIndex, Math.max(0, matches.length - 1));
+
+  useEffect(() => {
+    listRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [highlightIndex]);
+
+  function handleKeyDown(event: ReactKeyboardEvent) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex(Math.min(highlightIndex + 1, matches.length - 1));
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex(Math.max(highlightIndex - 1, 0));
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const command = matches[highlightIndex];
+      if (command) {
+        onClose();
+        command.run();
+      }
+    }
+  }
+
+  return (
+    <div className="modal-backdrop palette-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
+        <div className="palette-input">
+          <Search size={17} />
+          <input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }} onKeyDown={handleKeyDown} placeholder="Search commands, or type a task to capture…" aria-label="Search commands" />
+          <kbd>esc</kbd>
+        </div>
+        <div className="palette-list" ref={listRef} role="listbox">
+          {matches.length ? matches.map((command, index) => {
+            const Icon = command.icon;
+            return (
+              <button
+                type="button"
+                key={command.id}
+                className={index === highlightIndex ? "palette-item active" : "palette-item"}
+                data-active={index === highlightIndex}
+                role="option"
+                aria-selected={index === highlightIndex}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => { onClose(); command.run(); }}
+              >
+                <span className="palette-item-icon"><Icon size={16} /></span>
+                <span className="palette-item-copy"><strong>{command.title}</strong><small>{command.hint}</small></span>
+                <ArrowRight size={14} />
+              </button>
+            );
+          }) : <div className="palette-empty">No matching commands</div>}
+        </div>
+        <div className="palette-footer"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> select</span><span><kbd>⌘K</kbd> toggle</span></div>
+      </section>
+    </div>
+  );
 }
