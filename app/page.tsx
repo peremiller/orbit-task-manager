@@ -93,6 +93,12 @@ type Project = {
   description: string;
 };
 
+type PriorityProjectFilter = {
+  name: string;
+  color: string;
+  count: number;
+};
+
 type ScheduleWindow = {
   startTime: string;
   endTime: string;
@@ -886,6 +892,35 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     return filterTasks(tasks, { search, priority: priorityFilter, project: projectFilter, status: statusFilter, due: dueFilter, label: labelFilter });
   }, [dueFilter, labelFilter, priorityFilter, projectFilter, search, statusFilter, tasks]);
 
+  const inboxPriorityProjects = useMemo<PriorityProjectFilter[]>(() => {
+    if (activeView !== "inbox" || priorityFilter === "All") return [];
+
+    const matchingTasks = filterTasks(tasks, {
+      search,
+      priority: priorityFilter,
+      project: "All",
+      status: statusFilter,
+      due: dueFilter,
+      label: labelFilter,
+    }).filter((task) => !task.completed);
+    const counts = new Map<string, number>();
+
+    for (const task of matchingTasks) {
+      counts.set(task.project, (counts.get(task.project) ?? 0) + 1);
+    }
+
+    const knownProjects = projects
+      .filter((item) => counts.has(item.name))
+      .map((item) => ({ name: item.name, color: item.color, count: counts.get(item.name) ?? 0 }));
+    const knownProjectNames = new Set(knownProjects.map((item) => item.name));
+    const unmatchedProjects = Array.from(counts.entries())
+      .filter(([name]) => !knownProjectNames.has(name))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, count]) => ({ name, color: "#7b8494", count }));
+
+    return [...knownProjects, ...unmatchedProjects];
+  }, [activeView, dueFilter, labelFilter, priorityFilter, projects, search, statusFilter, tasks]);
+
   const openTasks = tasks.filter((task) => !task.completed);
   const completedCount = tasks.filter((task) => task.completed).length;
   const filteredOpenTasks = visibleTasks.filter((task) => !task.completed);
@@ -1368,6 +1403,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               totalCount={totalViewTaskCount}
               activeCount={activeFilterCount}
               showProjectFilter={!activeProject}
+              showPriorityProjectPills={activeView === "inbox" && priorityFilter !== "All"}
+              priorityProjects={inboxPriorityProjects}
               onPriorityChange={setPriorityFilter}
               onProjectChange={setProjectFilter}
               onStatusChange={setStatusFilter}
@@ -1566,7 +1603,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   );
 }
 
-function TaskFilterBar({ tasks, projects, priority, project, status, due, label, resultCount, totalCount, activeCount, showProjectFilter, onPriorityChange, onProjectChange, onStatusChange, onDueChange, onLabelChange, onClear }: {
+function TaskFilterBar({ tasks, projects, priority, project, status, due, label, resultCount, totalCount, activeCount, showProjectFilter, showPriorityProjectPills, priorityProjects, onPriorityChange, onProjectChange, onStatusChange, onDueChange, onLabelChange, onClear }: {
   tasks: Task[];
   projects: Project[];
   priority: "All" | Priority;
@@ -1578,6 +1615,8 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, label,
   totalCount: number;
   activeCount: number;
   showProjectFilter: boolean;
+  showPriorityProjectPills: boolean;
+  priorityProjects: PriorityProjectFilter[];
   onPriorityChange: (value: "All" | Priority) => void;
   onProjectChange: (value: string) => void;
   onStatusChange: (value: StatusFilter) => void;
@@ -1587,60 +1626,86 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, label,
 }) {
   const dueOptions = Array.from(new Set(tasks.map((task) => task.due)));
   const labelOptions = Array.from(new Set(tasks.flatMap((task) => task.labels ?? []))).sort();
+  const matchingProjectTaskCount = priorityProjects.reduce((total, item) => total + item.count, 0);
 
   return (
-    <section className="task-filter-bar" aria-label="Task filters">
-      <div className="task-filter-summary">
-        <span className="task-filter-icon"><ListFilter size={17} /></span>
-        <div><strong>Filter tasks</strong><small>{resultCount} of {totalCount} matching</small></div>
-        {activeCount > 0 && <em aria-label={`${activeCount} active filters`}>{activeCount}</em>}
-      </div>
-      <div className="task-filter-fields">
-        <label className="task-filter-control">
-          <span>Priority</span>
-          <select value={priority} onChange={(event) => onPriorityChange(event.target.value as "All" | Priority)}>
-            <option value="All">All priorities</option>
-            <option value="Very High">Very High</option>
-            <option value="High">High</option>
-            <option value="Medium">Medium</option>
-            <option value="Low">Low</option>
-          </select>
-        </label>
-        {showProjectFilter && (
+    <>
+      <section className={`task-filter-bar ${showPriorityProjectPills ? "has-project-pills" : ""}`} aria-label="Task filters">
+        <div className="task-filter-summary">
+          <span className="task-filter-icon"><ListFilter size={17} /></span>
+          <div><strong>Filter tasks</strong><small>{resultCount} of {totalCount} matching</small></div>
+          {activeCount > 0 && <em aria-label={`${activeCount} active filters`}>{activeCount}</em>}
+        </div>
+        <div className="task-filter-fields">
           <label className="task-filter-control">
-            <span>Project</span>
-            <select value={project} onChange={(event) => onProjectChange(event.target.value)}>
-              <option value="All">All projects</option>
-              {projects.map((item) => <option value={item.name} key={item.id}>{item.name}</option>)}
+            <span>Priority</span>
+            <select value={priority} onChange={(event) => onPriorityChange(event.target.value as "All" | Priority)}>
+              <option value="All">All priorities</option>
+              <option value="Very High">Very High</option>
+              <option value="High">High</option>
+              <option value="Medium">Medium</option>
+              <option value="Low">Low</option>
             </select>
           </label>
-        )}
-        <label className="task-filter-control">
-          <span>Status</span>
-          <select value={status} onChange={(event) => onStatusChange(event.target.value as StatusFilter)}>
-            <option value="All">All statuses</option>
-            <option value="todo">To do</option>
-            <option value="in-progress">In progress</option>
-            <option value="done">Completed</option>
-          </select>
-        </label>
-        <label className="task-filter-control">
-          <span>Due</span>
-          <select value={due} onChange={(event) => onDueChange(event.target.value)}>
-            <option value="All">Any date</option>
-            {dueOptions.map((item) => <option value={item} key={item}>{item}</option>)}
-          </select>
-        </label>
-        <label className="task-filter-control">
-          <span>Label</span>
-          <select value={label} onChange={(event) => onLabelChange(event.target.value)}>
-            <option value="All">All labels</option>
-            {labelOptions.map((item) => <option value={item} key={item}>@{item}</option>)}
-          </select>
-        </label>
-      </div>
-      <button className="clear-task-filters" type="button" onClick={onClear} disabled={activeCount === 0}><RotateCcw size={15} /> Clear</button>
-    </section>
+          {showProjectFilter && (
+            <label className="task-filter-control">
+              <span>Project</span>
+              <select value={project} onChange={(event) => onProjectChange(event.target.value)}>
+                <option value="All">All projects</option>
+                {projects.map((item) => <option value={item.name} key={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+          )}
+          <label className="task-filter-control">
+            <span>Status</span>
+            <select value={status} onChange={(event) => onStatusChange(event.target.value as StatusFilter)}>
+              <option value="All">All statuses</option>
+              <option value="todo">To do</option>
+              <option value="in-progress">In progress</option>
+              <option value="done">Completed</option>
+            </select>
+          </label>
+          <label className="task-filter-control">
+            <span>Due</span>
+            <select value={due} onChange={(event) => onDueChange(event.target.value)}>
+              <option value="All">Any date</option>
+              {dueOptions.map((item) => <option value={item} key={item}>{item}</option>)}
+            </select>
+          </label>
+          <label className="task-filter-control">
+            <span>Label</span>
+            <select value={label} onChange={(event) => onLabelChange(event.target.value)}>
+              <option value="All">All labels</option>
+              {labelOptions.map((item) => <option value={item} key={item}>@{item}</option>)}
+            </select>
+          </label>
+        </div>
+        <button className="clear-task-filters" type="button" onClick={onClear} disabled={activeCount === 0}><RotateCcw size={15} /> Clear</button>
+      </section>
+
+      {showPriorityProjectPills && (
+        <section className="inbox-project-filter-bar" aria-labelledby="inbox-project-filter-title">
+          <div className="inbox-project-filter-heading">
+            <strong id="inbox-project-filter-title">Projects with {priority} priority tasks</strong>
+            <small>{priorityProjects.length ? "Select a project to narrow the Inbox" : "No Inbox projects match the current filters"}</small>
+          </div>
+          <div className="inbox-project-pills" role="group" aria-label={`Filter ${priority} priority tasks by project`}>
+            <button type="button" className={project === "All" ? "active" : ""} aria-pressed={project === "All"} onClick={() => onProjectChange("All")}>
+              <span className="project-filter-dot all-projects" />
+              All projects
+              <em>{matchingProjectTaskCount}</em>
+            </button>
+            {priorityProjects.map((item) => (
+              <button type="button" key={item.name} className={project === item.name ? "active" : ""} aria-pressed={project === item.name} onClick={() => onProjectChange(item.name)}>
+                <span className="project-filter-dot" style={{ background: item.color }} />
+                <span>{item.name}</span>
+                <em>{item.count}</em>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+    </>
   );
 }
 

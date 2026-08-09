@@ -114,6 +114,7 @@ kbd { font-family: inherit; }
 .page-heading h1 { margin: 0; font-size: clamp(38px, 4vw, 58px); line-height: .98; letter-spacing: -.055em; font-weight: 760; }
 .page-heading > div > p:last-child { margin: 13px 0 0; color: var(--muted); font-size: 13px; }
 .task-filter-bar { max-width: 1460px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; gap: 16px; margin: 0 auto 28px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 17px; background: rgba(255,255,255,.7); box-shadow: 0 7px 22px rgba(22,35,70,.03); }
+.task-filter-bar.has-project-pills { margin-bottom: 10px; }
 .task-filter-summary { min-width: 150px; display: flex; align-items: center; gap: 10px; align-self: center; }
 .task-filter-icon { width: 35px; height: 35px; display: grid; flex: 0 0 auto; place-items: center; border-radius: 11px; background: var(--blue-soft); color: var(--blue); }
 .task-filter-summary > div { min-width: 0; display: grid; gap: 3px; }
@@ -129,6 +130,20 @@ kbd { font-family: inherit; }
 .clear-task-filters { height: 37px; display: flex; align-items: center; gap: 6px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--blue); font-size: 10px; font-weight: 700; transition: .16s ease; }
 .clear-task-filters:hover:not(:disabled) { border-color: rgba(36,87,255,.35); background: var(--blue-soft); }
 .clear-task-filters:disabled { color: #a5aab2; cursor: default; opacity: .62; }
+.inbox-project-filter-bar { max-width: 1460px; display: flex; align-items: center; gap: 18px; margin: 0 auto 28px; padding: 10px 12px; border: 1px solid rgba(36,87,255,.14); border-radius: 15px; background: rgba(247,249,255,.78); box-shadow: 0 6px 18px rgba(22,35,70,.025); }
+.inbox-project-filter-heading { min-width: 206px; display: grid; gap: 3px; }
+.inbox-project-filter-heading strong { color: var(--ink); font-size: 10px; }
+.inbox-project-filter-heading small { color: var(--muted); font-size: 8px; }
+.inbox-project-pills { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.inbox-project-pills button { min-width: 0; min-height: 33px; display: inline-flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: #555c68; font-size: 9px; font-weight: 700; transition: border-color .16s ease, background .16s ease, color .16s ease, box-shadow .16s ease; }
+.inbox-project-pills button:hover { border-color: rgba(36,87,255,.4); background: var(--blue-soft); color: var(--blue); }
+.inbox-project-pills button:focus-visible { outline: 3px solid rgba(36,87,255,.2); outline-offset: 2px; }
+.inbox-project-pills button.active { border-color: var(--blue); background: var(--blue); color: white; box-shadow: 0 6px 14px rgba(36,87,255,.16); }
+.inbox-project-pills button > span:not(.project-filter-dot) { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-filter-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; box-shadow: 0 0 0 2px rgba(123,132,148,.12); }
+.project-filter-dot.all-projects { background: conic-gradient(var(--blue) 0 25%, #7b5cff 25% 50%, var(--lime) 50% 75%, #ffb443 75%); }
+.inbox-project-pills button em { min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 5px; border-radius: 999px; background: #edf0f4; color: #6d7480; font-size: 8px; font-style: normal; }
+.inbox-project-pills button.active em { background: rgba(255,255,255,.18); color: white; }
 .heading-actions { display: flex; align-items: center; gap: 10px; }
 .secondary-button, .primary-button, .focus-button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; border-radius: 11px; font-size: 12px; font-weight: 700; transition: .18s ease; }
 .secondary-button { border: 1px solid var(--line); background: white; color: #555c68; }
@@ -515,6 +530,12 @@ kbd { font-family: inherit; }
 [data-theme="dark"] .task-filter-control select { border-color: var(--line); }
 [data-theme="dark"] .task-filter-icon { background: rgba(36,87,255,.18); }
 [data-theme="dark"] .clear-task-filters { border-color: var(--line); }
+[data-theme="dark"] .inbox-project-filter-bar { border-color: rgba(97,126,255,.25); background: rgba(17,24,39,.72); }
+[data-theme="dark"] .inbox-project-pills button { border-color: var(--line); background: #0d1422; color: #b2bdce; }
+[data-theme="dark"] .inbox-project-pills button:hover { border-color: rgba(97,126,255,.55); background: #17223a; color: #b6c5ff; }
+[data-theme="dark"] .inbox-project-pills button.active { border-color: var(--blue); background: var(--blue); color: white; }
+[data-theme="dark"] .inbox-project-pills button em { background: #202a3c; color: #aeb8c9; }
+[data-theme="dark"] .inbox-project-pills button.active em { background: rgba(255,255,255,.18); color: white; }
 [data-theme="dark"] .field-label input:focus,
 [data-theme="dark"] .field-label select:focus,
 [data-theme="dark"] .field-label textarea:focus { background: #111a2a; }
@@ -609,6 +630,8 @@ kbd { font-family: inherit; }
   .task-filter-bar { grid-template-columns: minmax(0,1fr) auto; align-items: center; margin-top: -12px; }
   .task-filter-fields { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(2, minmax(0,1fr)); }
   .clear-task-filters { grid-column: 2; grid-row: 1; }
+  .inbox-project-filter-bar { align-items: flex-start; flex-direction: column; gap: 9px; }
+  .inbox-project-filter-heading { min-width: 0; }
   .sidebar-open .sidebar-section { display: flex; }
   .timer-history-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .timer-history-toolbar { align-items: flex-start; flex-direction: column; gap: 16px; }
@@ -627,6 +650,9 @@ kbd { font-family: inherit; }
   .task-filter-summary { min-width: 0; }
   .task-filter-fields { display: flex; overflow-x: auto; margin-inline: -12px; padding: 1px 12px 5px; scrollbar-width: thin; }
   .task-filter-control { flex: 0 0 148px; }
+  .inbox-project-filter-bar { padding: 11px; }
+  .inbox-project-pills { width: calc(100% + 22px); flex-wrap: nowrap; overflow-x: auto; margin-inline: -11px; padding: 2px 11px 5px; scrollbar-width: thin; }
+  .inbox-project-pills button { flex: 0 0 auto; }
   .schedule-time-editor { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .schedule-editor-actions { grid-column: 1 / -1; justify-content: flex-end; }
   .quick-capture { align-items: center; margin-top: -6px; padding: 9px; }
