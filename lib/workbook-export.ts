@@ -244,27 +244,33 @@ function addTimesheetSheet(workbook: import("exceljs").Workbook, state: WorkTrac
   dates.forEach((_, index) => { sheet.getRow(5).getCell(6 + index).numFmt = "ddd\nmmm d"; });
   styleHeader(sheet.getRow(5));
   const generatedRows = buildTimesheetRows(state, week);
-  const rowWithRawHours = (item: WorkItem) => dates.map((date) => rawHours(state, item.id, date));
-  const includedWithHours = generatedRows.filter((row) => !row.excluded && rowWithRawHours(row.workItem).some((value) => value > 0));
-  const includedWithoutHours = generatedRows.filter((row) => !row.excluded && !rowWithRawHours(row.workItem).some((value) => value > 0));
+  const rowWithRawHours = (items: WorkItem[]) => dates.map((date) => items.reduce((total, item) => total + rawHours(state, item.id, date), 0));
+  const includedWithHours = generatedRows.filter((row) => !row.excluded && rowWithRawHours(row.workItems).some((value) => value > 0));
+  const includedWithoutHours = generatedRows.filter((row) => !row.excluded && !rowWithRawHours(row.workItems).some((value) => value > 0));
   const excluded = generatedRows.filter((row) => row.excluded);
   const rows = [...includedWithHours, ...includedWithoutHours, ...excluded];
   const firstDataRow = 6;
-  const adjustmentItem = includedWithHours.at(-1)?.workItem;
-  const adjustmentDay = adjustmentItem ? rowWithRawHours(adjustmentItem).findLastIndex((value) => value > 0) : -1;
+  const adjustmentRow = includedWithHours.at(-1);
+  const adjustmentDay = adjustmentRow ? rowWithRawHours(adjustmentRow.workItems).findLastIndex((value) => value > 0) : -1;
   rows.forEach((reportRow) => {
-    const resultRow = generatedRows.find((candidate) => candidate.workItem.id === reportRow.workItem.id)!;
-    const row = sheet.addRow([reportRow.workItem.taskType, reportRow.workItem.workstream, workItemDisplayTitleForWeek(state, reportRow.workItem, week), reportRow.workItem.application, reportRow.workItem.phase, ...dates.map(() => null), null, reportRow.excluded ? "Excluded - Innovation" : "Included"]);
+    const resultRow = generatedRows.find((candidate) => candidate.id === reportRow.id)!;
+    const actualTaskNames = reportRow.workItems.map((item) => workItemDisplayTitleForWeek(state, item, week)).join(", ");
+    const applications = Array.from(new Set(reportRow.workItems.map((item) => item.application).filter(Boolean))).join(", ");
+    const row = sheet.addRow([reportRow.workItem.taskType, reportRow.workItem.workstream, actualTaskNames, applications, reportRow.workItem.phase, ...dates.map(() => null), null, reportRow.excluded ? "Excluded - Innovation" : "Included"]);
     dates.forEach((date, dayIndex) => {
       const column = 6 + dayIndex;
-      const raw = `SUMIFS('Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow},'Actuals'!$I$${actualRows.firstDataRow}:$I$${actualRows.lastDataRow},$C${row.number},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${columnLetter(column)}$5)`;
-      const override = state.timesheetOverrides[timesheetOverrideKey(week, reportRow.workItem.id, date)];
+      const raw = `SUMIFS('Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow},'Actuals'!$H$${actualRows.firstDataRow}:$H$${actualRows.lastDataRow},$A${row.number},'Actuals'!$J$${actualRows.firstDataRow}:$J$${actualRows.lastDataRow},$B${row.number},'Actuals'!$L$${actualRows.firstDataRow}:$L$${actualRows.lastDataRow},$E${row.number},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${columnLetter(column)}$5)`;
+      const override = state.timesheetOverrides[timesheetOverrideKey(week, reportRow.id, date)];
+      const hasLegacyOverride = reportRow.workItems.some((item) => Number.isFinite(state.timesheetOverrides[timesheetOverrideKey(week, item.id, date)]));
       if (!reportRow.excluded && Number.isFinite(override)) {
         formula(row.getCell(column), `${override}`, resultRow.hours[dayIndex]);
         row.getCell(column).fill = { type: "pattern", pattern: "solid", fgColor: { argb: PALE_AMBER } };
+      } else if (!reportRow.excluded && hasLegacyOverride) {
+        formula(row.getCell(column), `${resultRow.hours[dayIndex]}`, resultRow.hours[dayIndex]);
+        row.getCell(column).fill = { type: "pattern", pattern: "solid", fgColor: { argb: PALE_AMBER } };
       } else if (reportRow.excluded) {
         formula(row.getCell(column), raw, resultRow.hours[dayIndex]);
-      } else if (reportRow.workItem.id === adjustmentItem?.id && dayIndex === adjustmentDay && eligibleActual >= 45) {
+      } else if (reportRow.id === adjustmentRow?.id && dayIndex === adjustmentDay && eligibleActual >= 45) {
         const priorRows = row.number > firstDataRow ? `SUM(F${firstDataRow}:${columnLetter(dayEndColumn)}${row.number - 1})` : "0";
         const priorCells = dayIndex > 0 ? `SUM(F${row.number}:${columnLetter(column - 1)}${row.number})` : "0";
         formula(row.getCell(column), `IF($B$4<${REQUIRED_WEEKLY_HOURS},${raw},${REQUIRED_WEEKLY_HOURS}-${priorRows}-${priorCells})`, resultRow.hours[dayIndex]);

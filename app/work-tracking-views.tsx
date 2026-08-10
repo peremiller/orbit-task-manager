@@ -941,18 +941,19 @@ export function TimesheetReportView({ state, onChange, personName }: TrackingVie
     setLeaveMessage(`${formatHours(hours)}h ${leaveType.toLocaleLowerCase()} scheduled and shared with Actuals, Effort Plan, and Dashboard.`);
   }
 
-  function setTimesheetOverride(workItemId: string, date: string, rawValue: string) {
+  function setTimesheetOverride(rowId: string, date: string, rawValue: string) {
     const numeric = Number(rawValue);
     if (!Number.isFinite(numeric) || numeric < 0 || numeric > 24) return;
-    const key = timesheetOverrideKey(week, workItemId, date);
+    const key = timesheetOverrideKey(week, rowId, date);
     onChange((current) => ({ ...current, timesheetOverrides: { ...current.timesheetOverrides, [key]: Math.round(numeric * 4) / 4 } }));
   }
 
-  function resetTimesheetOverride(workItemId: string, date?: string) {
+  function resetTimesheetOverride(row: (typeof rows)[number], date?: string) {
     onChange((current) => {
       const next = { ...current.timesheetOverrides };
-      if (date) delete next[timesheetOverrideKey(week, workItemId, date)];
-      else dates.forEach((day) => delete next[timesheetOverrideKey(week, workItemId, day)]);
+      const ids = [row.id, ...row.workItems.map((item) => item.id)];
+      if (date) ids.forEach((id) => delete next[timesheetOverrideKey(week, id, date)]);
+      else ids.forEach((id) => dates.forEach((day) => delete next[timesheetOverrideKey(week, id, day)]));
       return { ...current, timesheetOverrides: next };
     });
   }
@@ -1021,10 +1022,10 @@ export function TimesheetReportView({ state, onChange, personName }: TrackingVie
         <div className="work-table-scroll">
           <table className="work-table timesheet-table">
             <thead><tr><th>Task type</th><th>Task</th><th>Subcategory</th>{dates.map((day, index) => <th key={day}>{WEEKDAY_LABELS[index]}<small>{formatShortDate(day)}</small></th>)}<th>Total</th></tr><tr className="day-total-row"><th colSpan={3}>Included day totals</th>{dayTotals.map((total, index) => <th key={dates[index]}>{formatHours(total)}</th>)}<th>{formatHours(reportTotal)}</th></tr></thead>
-            <tbody>{rows.length ? rows.map((row) => <tr key={row.workItem.id} className={row.excluded ? "innovation-row" : ""}><td><span>{row.workItem.taskType}</span>{row.excluded && <small className="innovation-note">Excluded</small>}</td><td><strong>{row.workItem.workstream}</strong><small>Actuals task: {workItemDisplayTitleForWeek(state, row.workItem, week)}{row.workItem.application ? ` · ${row.workItem.application}` : ""}</small>{!row.excluded && dates.some((date) => timesheetOverrideKey(week, row.workItem.id, date) in state.timesheetOverrides) && <button className="reset-row-overrides" type="button" onClick={() => resetTimesheetOverride(row.workItem.id)}>Reset row to Actuals</button>}</td><td>{row.workItem.phase || "—"}</td>{row.hours.map((hours, index) => {
-              const overrideKey = timesheetOverrideKey(week, row.workItem.id, dates[index]);
+            <tbody>{rows.length ? rows.map((row) => <tr key={row.id} className={row.excluded ? "innovation-row" : ""}><td><span>{row.workItem.taskType}</span>{row.excluded && <small className="innovation-note">Excluded</small>}</td><td><strong>{row.workItem.workstream}</strong><small>Actuals tasks: {row.workItems.map((item) => workItemDisplayTitleForWeek(state, item, week)).join(", ")}</small>{!row.excluded && dates.some((date) => [row.id, ...row.workItems.map((item) => item.id)].some((id) => timesheetOverrideKey(week, id, date) in state.timesheetOverrides)) && <button className="reset-row-overrides" type="button" onClick={() => resetTimesheetOverride(row)}>Reset row to Actuals</button>}</td><td>{row.workItem.phase || "—"}</td>{row.hours.map((hours, index) => {
+              const overrideKey = timesheetOverrideKey(week, row.id, dates[index]);
               const overridden = overrideKey in state.timesheetOverrides;
-              return <td key={dates[index]}>{row.excluded ? (hours ? formatHours(hours) : "—") : <div className={`timesheet-edit-cell ${overridden ? "overridden" : ""}`}><input key={`${overrideKey}-${hours}`} type="number" min="0" max="24" step="0.25" defaultValue={formatHours(hours)} aria-label={`${row.workItem.title} hours for ${dates[index]}`} onBlur={(event) => setTimesheetOverride(row.workItem.id, dates[index], event.target.value)} />{overridden && <button type="button" onClick={() => resetTimesheetOverride(row.workItem.id, dates[index])} aria-label={`Reset ${row.workItem.title} for ${dates[index]}`} title="Reset to Actuals-derived value">↺</button>}</div>}</td>;
+              return <td key={dates[index]}>{row.excluded ? (hours ? formatHours(hours) : "—") : <div className={`timesheet-edit-cell ${overridden ? "overridden" : ""}`}><input key={`${overrideKey}-${hours}`} type="number" min="0" max="24" step="0.25" defaultValue={formatHours(hours)} aria-label={`${row.workItem.taskType}, ${row.workItem.workstream}, ${row.workItem.phase} hours for ${dates[index]}`} onBlur={(event) => setTimesheetOverride(row.id, dates[index], event.target.value)} />{overridden && <button type="button" onClick={() => resetTimesheetOverride(row, dates[index])} aria-label={`Reset grouped hours for ${dates[index]}`} title="Reset to Actuals-derived value">↺</button>}</div>}</td>;
             })}<td><strong>{formatHours(row.total)}h</strong></td></tr>) : <tr><td colSpan={4 + dates.length} className="work-empty">Add Actuals for this week to generate the report.</td></tr>}</tbody>
             <tfoot><tr><td colSpan={3 + dates.length}>Timesheet included total</td><td>{formatHours(reportTotal)}h / 45h</td></tr></tfoot>
           </table>

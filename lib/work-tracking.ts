@@ -121,7 +121,9 @@ export type WorkTrackingState = {
 };
 
 export type TimesheetRow = {
+  id: string;
   workItem: WorkItem;
+  workItems: WorkItem[];
   hours: number[];
   total: number;
   excluded: boolean;
@@ -244,6 +246,12 @@ export function timesheetOverrideKey(weekStart: string, workItemId: string, date
   return `${weekStartFromDate(weekStart)}::${workItemId}::${date}`;
 }
 
+export function timesheetGroupId(workItem: Pick<WorkItem, "taskType" | "workstream" | "phase">) {
+  return [workItem.taskType, workItem.workstream, workItem.phase]
+    .map((value) => value.trim().toLocaleLowerCase())
+    .join("::");
+}
+
 export function isInnovationWorkItem(item: WorkItem) {
   return item.workstream === "Innovation" || item.taskType === "Innovation";
 }
@@ -326,7 +334,7 @@ export function buildTimesheetRows(state: WorkTrackingState, weekStart: string):
     : eligibleFlat;
   let cursor = 0;
 
-  return state.workItems
+  const sourceRows = state.workItems
     .map((workItem, rowIndex) => {
       const excluded = isInnovationWorkItem(workItem);
       const hours = cells[rowIndex].map((actual) => {
@@ -339,9 +347,30 @@ export function buildTimesheetRows(state: WorkTrackingState, weekStart: string):
         const override = state.timesheetOverrides[timesheetOverrideKey(weekStart, workItem.id, dates[dayIndex])];
         return Number.isFinite(override) ? override : value;
       });
-      return { workItem, hours: finalHours, total: finalHours.reduce((sum, value) => sum + value, 0), excluded };
+      return { id: workItem.id, workItem, workItems: [workItem], hours: finalHours, total: finalHours.reduce((sum, value) => sum + value, 0), excluded };
     })
     .filter((row) => row.total > 0 || (row.workItem.plannedHoursByWeek[weekStartFromDate(weekStart)] ?? 0) > 0);
+
+  const grouped = new Map<string, TimesheetRow>();
+  sourceRows.forEach((row) => {
+    const id = timesheetGroupId(row.workItem);
+    const current = grouped.get(id);
+    if (!current) {
+      grouped.set(id, { ...row, id });
+      return;
+    }
+    current.workItems.push(row.workItem);
+    current.hours = current.hours.map((value, index) => value + row.hours[index]);
+    current.total += row.total;
+  });
+
+  return Array.from(grouped.values()).map((row) => {
+    const hours = row.hours.map((value, dayIndex) => {
+      const override = state.timesheetOverrides[timesheetOverrideKey(weekStart, row.id, dates[dayIndex])];
+      return !row.excluded && Number.isFinite(override) ? override : value;
+    });
+    return { ...row, hours, total: hours.reduce((sum, value) => sum + value, 0) };
+  });
 }
 
 export function createDefaultWorkTrackingState(now = new Date()): WorkTrackingState {
