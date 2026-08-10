@@ -110,6 +110,8 @@ type SessionUser = {
   id: string;
   username: string;
   displayName: string;
+  role: "owner" | "admin" | "member";
+  canEditSelectionManager: boolean;
 };
 
 type SyncStatus = "loading" | "syncing" | "synced" | "offline";
@@ -961,6 +963,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       ? { ...VIEW_TITLES.today, eyebrow: localDateLabel, title: `${localGreeting}, ${sessionUser?.displayName.split(" ")[0] ?? "there"}` }
       : VIEW_TITLES[activeView];
   const isWorkTrackingView = activeView === "actuals" || activeView === "effortPlan" || activeView === "timesheetReport" || activeView === "workDashboard" || activeView === "selectionManager";
+  const canEditSelectionManager = sessionUser?.canEditSelectionManager === true;
   const taskFiltersVisible = !isWorkTrackingView && activeView !== "analytics" && activeView !== "timerHistory" && activeView !== "filtersLabels" && (activeView !== "projects" || Boolean(activeProject));
   const activeFilterCount = [search.trim(), priorityFilter !== "All", projectFilter !== "All", statusFilter !== "All", dueFilter !== "All", labelFilter !== "All"].filter(Boolean).length;
   const viewTaskCount = activeProject
@@ -1391,7 +1394,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             <button className="icon-button" aria-label="Notifications"><Bell size={19} /><span className="notification-dot" /></button>
             <div className="profile">
               <div className="avatar">{userInitials(sessionUser?.displayName ?? "AJ Miller")}<span /></div>
-              <div><strong>{sessionUser?.displayName ?? "AJ Miller"}</strong><small>@{sessionUser?.username ?? "aj.miller"}</small></div>
+              <div><strong>{sessionUser?.displayName ?? "AJ Miller"}</strong><small>@{sessionUser?.username ?? "aj.miller"}{sessionUser?.role ? ` · ${sessionUser.role[0].toUpperCase()}${sessionUser.role.slice(1)}` : ""}</small></div>
               <form action="/api/auth/logout" method="post" onSubmit={() => navigator.serviceWorker?.controller?.postMessage({ type: "CLEAR_PRIVATE_CACHE" })}><button className="profile-logout" type="submit" aria-label="Sign out" title="Sign out"><LogOut size={17} /></button></form>
             </div>
           </div>
@@ -1480,7 +1483,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           {activeView === "effortPlan" && <EffortPlanView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
           {activeView === "timesheetReport" && <TimesheetReportView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
           {activeView === "workDashboard" && <WorkDashboardView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
-          {activeView === "selectionManager" && <SelectionManagerView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
+          {activeView === "selectionManager" && <SelectionManagerView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} canEdit={canEditSelectionManager} editorUsername={sessionUser?.username ?? ""} />}
         </div>
       </main>
 

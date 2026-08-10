@@ -14,6 +14,7 @@ import {
   weekdayDates,
   weekStartFromDate,
   workItemActualHoursForWeek,
+  workItemDisplayTitleForWeek,
   type WorkItem,
   type WorkTrackingState,
 } from "./work-tracking";
@@ -142,7 +143,7 @@ function addActualsSheet(workbook: import("exceljs").Workbook, state: WorkTracki
       entry.testCaseCount,
       entry.bugCount,
       item?.taskType ?? "",
-      item?.title ?? "Unknown task",
+      item ? workItemDisplayTitleForWeek(state, item, week) : "Unknown task",
       item?.workstream ?? "Other",
       item?.application ?? "",
       item?.phase ?? "",
@@ -187,7 +188,7 @@ function addEffortPlanSheet(workbook: import("exceljs").Workbook, state: WorkTra
   weeks.forEach((week) => state.workItems.forEach((item) => {
     const planned = item.plannedHoursByWeek[week] ?? 0;
     const actual = week === anchorWeek ? workItemActualHoursForWeek(state, item.id, week) : 0;
-    const row = sheet.addRow([dateValue(week), null, null, item.workstream, item.application, item.phase, item.taskType, item.title, planned, null, null, item.frequency, item.notes, null]);
+    const row = sheet.addRow([dateValue(week), null, null, item.workstream, item.application, item.phase, item.taskType, workItemDisplayTitleForWeek(state, item, week), planned, null, null, item.frequency, item.notes, null]);
     row.getCell(1).numFmt = "yyyy-mm-dd";
     formula(row.getCell(2), `A${row.number}+6`, dateValue(addDays(week, 6)));
     row.getCell(2).numFmt = "yyyy-mm-dd";
@@ -253,7 +254,7 @@ function addTimesheetSheet(workbook: import("exceljs").Workbook, state: WorkTrac
   const adjustmentDay = adjustmentItem ? rowWithRawHours(adjustmentItem).findLastIndex((value) => value > 0) : -1;
   rows.forEach((reportRow) => {
     const resultRow = generatedRows.find((candidate) => candidate.workItem.id === reportRow.workItem.id)!;
-    const row = sheet.addRow([reportRow.workItem.taskType, reportRow.workItem.title, reportRow.workItem.workstream, reportRow.workItem.application, reportRow.workItem.phase, ...dates.map(() => null), null, reportRow.excluded ? "Excluded - Innovation" : "Included"]);
+    const row = sheet.addRow([reportRow.workItem.taskType, workItemDisplayTitleForWeek(state, reportRow.workItem, week), reportRow.workItem.workstream, reportRow.workItem.application, reportRow.workItem.phase, ...dates.map(() => null), null, reportRow.excluded ? "Excluded - Innovation" : "Included"]);
     dates.forEach((date, dayIndex) => {
       const column = 6 + dayIndex;
       const raw = `SUMIFS('Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow},'Actuals'!$I$${actualRows.firstDataRow}:$I$${actualRows.lastDataRow},$B${row.number},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${columnLetter(column)}$5)`;
@@ -410,7 +411,7 @@ function addGlossarySheet(workbook: import("exceljs").Workbook, week: string, pe
     ["Formula: Timesheet ready check", "IF(Included total = 45, Ready, Needs remaining hours).", "Exported workbook clearly flags an incomplete week.", "Used in the Timesheet total row and linked to the Dashboard."],
     ["Formula: Timesheet override", "An edited Timesheet cell is exported as a numeric formula and highlighted amber.", "The override replaces only that derived cell and can be reset to Actuals in Orbit.", "Dashboard readiness and the included total recalculate from the edited value."],
     ["Scheduled in advance", "A leave or holiday entry created from Timesheet Report for a future date.", "Creates an auditable source row in Actuals and adds the same hours to Effort Plan.", "Flows into Timesheet Report and Dashboard like other eligible work."],
-    ["Philippine holidays", "Official 2026 Philippine regular holidays and special non-working days seeded as 9-hour advance entries.", "The special working EDSA observance is not treated as leave; later years are added only after an official proclamation.", "Seeded entries may be edited or deleted and are not recreated after initial migration."],
+    ["Philippine holidays", "Official 2026 Philippine regular holidays and special non-working days seeded as 9-hour advance entries.", "Every Public Holiday must include its specific holiday name; the special working EDSA observance is not treated as leave.", "Holiday names appear in Actuals, Effort Plan, Timesheet Report, Dashboard, and exports. Later years are added only after an official proclamation."],
     ["Timesheet source entry", "Utilized Test Planning or Test Execution entered directly from Timesheet Report.", "Creates an Actuals row and adds the same hours to Effort Plan.", "Updates utilization, test case and bug counts, Timesheet totals, and Dashboard metrics."],
     ["Formula: Utilization classification", "IF Task type is Test and Phase contains Planning or Execution, the task is Utilized; meetings and other work are non-utilized.", "Meeting hours never count as utilized.", "Used in every Utilization Classification and Utilized hours cell."],
     ["Formula: Utilization rate", "Utilized hours divided by the required 45-hour workweek.", "Productive share is also shown as Utilized hours divided by all Actual hours.", "Used in Utilization summary and Dashboard & Analytics."],
@@ -443,7 +444,7 @@ function addUtilizationSheet(workbook: import("exceljs").Workbook, state: WorkTr
     const utilized = item.taskType === "Test" && /planning|execution/i.test(item.phase);
     const meeting = item.taskType.startsWith("Meeting");
     const classification = utilized ? "Utilized" : meeting ? "Non-utilized meeting" : "Non-utilized / review";
-    const row = sheet.addRow([item.title, item.workstream, item.phase, item.taskType, null, null, null, null]);
+    const row = sheet.addRow([workItemDisplayTitleForWeek(state, item, week), item.workstream, item.phase, item.taskType, null, null, null, null]);
     formula(row.getCell(5), `SUMIF('Actuals'!$I$${actualRows.firstDataRow}:$I$${actualRows.lastDataRow},A${row.number},'Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow})`, actual);
     formula(row.getCell(6), `IF(AND(D${row.number}="Test",OR(ISNUMBER(SEARCH("Planning",C${row.number})),ISNUMBER(SEARCH("Execution",C${row.number})))),"Utilized",IF(ISNUMBER(SEARCH("Meeting",D${row.number})),"Non-utilized meeting","Non-utilized / review"))`, classification);
     formula(row.getCell(7), `IF(F${row.number}="Utilized",E${row.number},0)`, utilized ? actual : 0);
@@ -508,7 +509,8 @@ function addUtilizationSheet(workbook: import("exceljs").Workbook, state: WorkTr
 }
 
 export async function buildWorkTrackingWorkbookBuffer(state: WorkTrackingState, week: string, personName: string) {
-  const { Workbook } = await import("exceljs");
+  const exceljs = await import("exceljs");
+  const Workbook = exceljs.Workbook ?? exceljs.default.Workbook;
   const workbook = new Workbook();
   workbook.creator = personName;
   workbook.lastModifiedBy = personName;

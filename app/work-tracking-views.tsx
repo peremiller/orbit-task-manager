@@ -18,6 +18,7 @@ import {
   isInnovationWorkItem,
   maximumPlanningDate,
   plannedHoursForWeek,
+  publicHolidayNamesForWorkItemWeek,
   reportingWeeks,
   sprintForDate,
   timesheetOverrideKey,
@@ -26,6 +27,7 @@ import {
   weekdayDates,
   weekStartFromDate,
   workItemActualHoursForWeek,
+  workItemDisplayTitleForWeek,
   type ActualEntry,
   type Frequency,
   type ReportingPeriodMode,
@@ -44,6 +46,11 @@ type TrackingViewProps = {
   onChange: Dispatch<SetStateAction<WorkTrackingState>>;
   orbitTasks: OrbitTaskOption[];
   personName: string;
+};
+
+type SelectionManagerViewProps = TrackingViewProps & {
+  canEdit: boolean;
+  editorUsername: string;
 };
 
 const NEW_TASK = "__new-task";
@@ -282,7 +289,7 @@ export function ActualsView({ state, onChange, orbitTasks, personName }: Trackin
         <div className="work-table-scroll">
           <table className="work-table actuals-matrix">
             <thead><tr><th rowSpan={2}>Task</th><th rowSpan={2}>Workstream</th>{dates.map((day, index) => <th key={day} colSpan={3} className="actual-day-group">{WEEKDAY_LABELS[index]}<small>{formatShortDate(day)}</small></th>)}<th rowSpan={2}>Total hours</th></tr><tr className="actual-metric-headings">{dates.flatMap((day) => [<th key={`${day}-hours`}>Hours</th>, <th key={`${day}-tests`}>Test cases</th>, <th key={`${day}-bugs`}>Bugs</th>])}</tr></thead>
-            <tbody>{rows.length ? rows.map((row) => <tr key={row.item.id}><td><strong>{row.item.title}</strong><small>{row.item.application || "No application"} · {row.item.phase || "No phase"}</small></td><td><span className={`workstream-pill ${isInnovationWorkItem(row.item) ? "innovation" : ""}`}>{row.item.workstream}</span></td>{row.daily.flatMap((metrics, index) => [<td key={`${dates[index]}-hours`}>{metrics.hours ? formatHours(metrics.hours) : "—"}</td>, <td key={`${dates[index]}-tests`}>{metrics.testCases || "—"}</td>, <td key={`${dates[index]}-bugs`}>{metrics.bugs || "—"}</td>])}<td><strong>{formatHours(row.total)}h</strong></td></tr>) : <tr><td colSpan={3 + (dates.length * 3)} className="work-empty">No Actuals recorded for this workweek.</td></tr>}</tbody>
+            <tbody>{rows.length ? rows.map((row) => <tr key={row.item.id}><td><strong>{workItemDisplayTitleForWeek(state, row.item, week)}</strong><small>{row.item.application || "No application"} · {row.item.phase || "No phase"}</small></td><td><span className={`workstream-pill ${isInnovationWorkItem(row.item) ? "innovation" : ""}`}>{row.item.workstream}</span></td>{row.daily.flatMap((metrics, index) => [<td key={`${dates[index]}-hours`}>{metrics.hours ? formatHours(metrics.hours) : "—"}</td>, <td key={`${dates[index]}-tests`}>{metrics.testCases || "—"}</td>, <td key={`${dates[index]}-bugs`}>{metrics.bugs || "—"}</td>])}<td><strong>{formatHours(row.total)}h</strong></td></tr>) : <tr><td colSpan={3 + (dates.length * 3)} className="work-empty">No Actuals recorded for this workweek.</td></tr>}</tbody>
           </table>
         </div>
       </div>
@@ -291,7 +298,7 @@ export function ActualsView({ state, onChange, orbitTasks, personName }: Trackin
         <div className="work-panel-heading"><div><p className="eyebrow">Entry detail</p><h2>{formatReportingPeriod(week, periodMode, undefined, state.sprints)}</h2></div><span>{weekEntries.length} entries</span></div>
         <div className="actual-entry-list">{weekEntries.length ? weekEntries.map((entry) => {
           const item = state.workItems.find((candidate) => candidate.id === entry.workItemId);
-          return <article key={entry.id}><div><strong>{item?.title ?? "Unknown task"}{entry.entrySource === "scheduled-advance" && <em className="advance-entry-badge">Scheduled in advance</em>}{entry.entrySource === "timesheet-source" && <em className="advance-entry-badge utilized">Entered from Timesheet</em>}</strong><span>{entry.date} · {entry.startTime}–{entry.endTime} · {formatHours(hoursBetween(entry.startTime, entry.endTime))}h · {entry.testCaseCount} test cases · {entry.bugCount} bugs</span><p>{entry.details || item?.notes || "No additional details"}</p></div><button type="button" onClick={() => removeEntry(entry.id)} aria-label={`Delete ${item?.title ?? "entry"}`}><Trash2 size={16} /></button></article>;
+          return <article key={entry.id}><div><strong>{item?.title ?? "Unknown task"}{entry.holidayName ? ` — ${entry.holidayName}` : ""}{entry.entrySource === "scheduled-advance" && <em className="advance-entry-badge">Scheduled in advance</em>}{entry.entrySource === "timesheet-source" && <em className="advance-entry-badge utilized">Entered from Timesheet</em>}</strong><span>{entry.date} · {entry.startTime}–{entry.endTime} · {formatHours(hoursBetween(entry.startTime, entry.endTime))}h · {entry.testCaseCount} test cases · {entry.bugCount} bugs</span><p>{entry.details || item?.notes || "No additional details"}</p></div><button type="button" onClick={() => removeEntry(entry.id)} aria-label={`Delete ${entry.holidayName || item?.title || "entry"}`}><Trash2 size={16} /></button></article>;
         }) : <p className="work-empty">Add your first entry above.</p>}</div>
       </div>
     </div>
@@ -354,7 +361,7 @@ export function EffortPlanView({ state, onChange, personName }: TrackingViewProp
               <td><select aria-label={`Workstream for ${item.title}`} value={item.workstream} onChange={(event) => updateItem(item.id, { workstream: event.target.value as Workstream })}>{state.options.workstreams.map((value) => <option key={value}>{value}</option>)}</select></td>
               <td><select aria-label={`Application for ${item.title}`} value={item.application} onChange={(event) => updateItem(item.id, { application: event.target.value })}><option value="">Select application</option>{state.options.applications.map((value) => <option key={value}>{value}</option>)}</select></td>
               <td><select aria-label={`Phase for ${item.title}`} value={item.phase} onChange={(event) => updateItem(item.id, { phase: event.target.value })}>{state.options.phases.map((value) => <option key={value}>{value}</option>)}</select></td>
-              <td><input aria-label="Task description" value={item.title} onChange={(event) => updateItem(item.id, { title: event.target.value })} /><select aria-label={`Task type for ${item.title}`} value={item.taskType} onChange={(event) => updateItem(item.id, { taskType: event.target.value as TaskType })}>{state.options.taskTypes.map((value) => <option key={value}>{value}</option>)}</select></td>
+              <td><input aria-label="Task description" value={item.title} onChange={(event) => updateItem(item.id, { title: event.target.value })} /><select aria-label={`Task type for ${item.title}`} value={item.taskType} onChange={(event) => updateItem(item.id, { taskType: event.target.value as TaskType })}>{state.options.taskTypes.map((value) => <option key={value}>{value}</option>)}</select>{Array.from(new Set(state.selectedEffortWeeks.flatMap((selectedWeek) => publicHolidayNamesForWorkItemWeek(state, item.id, selectedWeek)))).length > 0 && <small className="holiday-name-note">Holiday: {Array.from(new Set(state.selectedEffortWeeks.flatMap((selectedWeek) => publicHolidayNamesForWorkItemWeek(state, item.id, selectedWeek)))).join(", ")}</small>}</td>
               {state.selectedEffortWeeks.map((week) => <td key={week}><input className="hours-input" type="number" min="0" step="0.25" aria-label={`Planned hours for ${item.title}, ${formatWeekRange(week)}`} value={item.plannedHoursByWeek[week] ?? 0} onChange={(event) => updatePlannedHours(item.id, week, Number(event.target.value))} /><button className="use-actual-button" type="button" onClick={() => updatePlannedHours(item.id, week, workItemActualHoursForWeek(state, item.id, week))}>Use actual</button></td>)}
               {state.selectedEffortWeeks.map((week) => <td key={`actual-${week}`} className="read-only-hours"><strong>{formatHours(workItemActualHoursForWeek(state, item.id, week))}h</strong><small>from Actuals</small></td>)}
               <td><select aria-label={`Frequency for ${item.title}`} value={item.frequency} onChange={(event) => updateItem(item.id, { frequency: event.target.value as Frequency })}>{state.options.frequencies.map((value) => <option key={value}>{value}</option>)}</select></td>
@@ -367,7 +374,7 @@ export function EffortPlanView({ state, onChange, personName }: TrackingViewProp
   );
 }
 
-export function SelectionManagerView({ state, onChange }: TrackingViewProps) {
+export function SelectionManagerView({ state, onChange, canEdit, editorUsername }: SelectionManagerViewProps) {
   const [drafts, setDrafts] = useState<Record<WorkOptionGroup, string>>({ workstreams: "", taskTypes: "", phases: "", applications: "", frequencies: "", leaveTypes: "" });
   const [message, setMessage] = useState("Changes apply immediately across Actuals, Effort Plan, Timesheet Report, and Dashboard.");
   const [sprintDraft, setSprintDraft] = useState(() => {
@@ -382,6 +389,10 @@ export function SelectionManagerView({ state, onChange }: TrackingViewProps) {
 
   function addSprint(event: FormEvent) {
     event.preventDefault();
+    if (!canEdit) {
+      setMessage("Only owner/admin @aj.miller can edit Selection Manager.");
+      return;
+    }
     const name = sprintDraft.name.trim();
     if (!name || !sprintDraft.startDate || !sprintDraft.endDate || sprintDraft.startDate > sprintDraft.endDate) {
       setMessage("Enter a sprint name and a valid start and end date.");
@@ -407,6 +418,10 @@ export function SelectionManagerView({ state, onChange }: TrackingViewProps) {
   }
 
   function updateSprint(id: string, patch: Partial<SprintDefinition>) {
+    if (!canEdit) {
+      setMessage("Only owner/admin @aj.miller can edit Selection Manager.");
+      return false;
+    }
     const existing = state.sprints.find((sprint) => sprint.id === id);
     if (!existing) return false;
     const next = { ...existing, ...patch, name: (patch.name ?? existing.name).trim() };
@@ -432,6 +447,10 @@ export function SelectionManagerView({ state, onChange }: TrackingViewProps) {
   }
 
   function deleteSprint(id: string) {
+    if (!canEdit) {
+      setMessage("Only owner/admin @aj.miller can edit Selection Manager.");
+      return;
+    }
     const sprint = state.sprints.find((item) => item.id === id);
     if (!sprint) return;
     onChange((current) => ({ ...current, sprints: current.sprints.filter((item) => item.id !== id) }));
@@ -450,6 +469,10 @@ export function SelectionManagerView({ state, onChange }: TrackingViewProps) {
   }
 
   function addOption(group: WorkOptionGroup) {
+    if (!canEdit) {
+      setMessage("Only owner/admin @aj.miller can edit Selection Manager.");
+      return;
+    }
     const option = drafts[group].trim();
     if (!option) {
       setMessage("Enter an option before adding it.");
@@ -465,6 +488,10 @@ export function SelectionManagerView({ state, onChange }: TrackingViewProps) {
   }
 
   function renameOption(group: WorkOptionGroup, previous: string, nextValue: string) {
+    if (!canEdit) {
+      setMessage("Only owner/admin @aj.miller can edit Selection Manager.");
+      return false;
+    }
     const next = nextValue.trim();
     if (!next || next === previous) return next === previous;
     if (PROTECTED_OPTIONS[group].has(previous)) {
@@ -493,6 +520,10 @@ export function SelectionManagerView({ state, onChange }: TrackingViewProps) {
   }
 
   function deleteOption(group: WorkOptionGroup, option: string) {
+    if (!canEdit) {
+      setMessage("Only owner/admin @aj.miller can edit Selection Manager.");
+      return;
+    }
     const used = usageCount(group, option);
     if (PROTECTED_OPTIONS[group].has(option)) {
       setMessage(`“${option}” is protected because it supports a reporting rule.`);
@@ -512,24 +543,24 @@ export function SelectionManagerView({ state, onChange }: TrackingViewProps) {
 
   return (
     <div className="view-stack work-view selection-manager-view">
-      <div className="selection-manager-banner"><div><p className="eyebrow">Central configuration</p><h2>Dropdown values, options, and sprints</h2><span>Manage the selections and sprint calendar used by the connected reporting workflow.</span></div><strong>{state.options.workstreams.length + state.options.taskTypes.length + state.options.phases.length + state.options.applications.length + state.options.frequencies.length + state.options.leaveTypes.length} options · {state.sprints.length} {state.sprints.length === 1 ? "sprint" : "sprints"}</strong></div>
-      <div className="selection-message" role="status">{message}</div>
+      <div className="selection-manager-banner"><div><p className="eyebrow">Central configuration</p><h2>Dropdown values, options, and sprints</h2><span>Manage the selections and sprint calendar used by the connected reporting workflow.</span></div><strong>{canEdit ? `Owner edit access · @${editorUsername.replace(/^@/, "")}` : "Read-only access"}</strong></div>
+      <div className="selection-message" role="status">{canEdit ? message : "Only owner/admin @aj.miller can edit Selection Manager. You can still review all configured values."}</div>
       <section className="work-panel sprint-manager-card">
         <div className="work-panel-heading"><div><p className="eyebrow">Reporting calendar</p><h2>Sprint dates</h2><p>Each sprint becomes an “Every sprint” view in Actuals, Effort Plan, Timesheet Report, Dashboard, and selected-period exports.</p></div><span>{state.sprints.length} configured</span></div>
         <div className="sprint-list">
           {state.sprints.length ? state.sprints.map((sprint) => <div className="sprint-row" key={sprint.id}>
-            <label><span>Sprint name</span><input defaultValue={sprint.name} aria-label={`Name for ${sprint.name}`} onBlur={(event) => { if (!updateSprint(sprint.id, { name: event.target.value })) event.currentTarget.value = sprint.name; }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
-            <label><span>Start date</span><input type="date" max={PLANNING_MAX_DATE} defaultValue={sprint.startDate} aria-label={`Start date for ${sprint.name}`} onBlur={(event) => { if (!updateSprint(sprint.id, { startDate: event.target.value })) event.currentTarget.value = sprint.startDate; }} /></label>
-            <label><span>End date</span><input type="date" max={PLANNING_MAX_DATE} defaultValue={sprint.endDate} aria-label={`End date for ${sprint.name}`} onBlur={(event) => { if (!updateSprint(sprint.id, { endDate: event.target.value })) event.currentTarget.value = sprint.endDate; }} /></label>
+            <label><span>Sprint name</span><input defaultValue={sprint.name} disabled={!canEdit} aria-label={`Name for ${sprint.name}`} onBlur={(event) => { if (!updateSprint(sprint.id, { name: event.target.value })) event.currentTarget.value = sprint.name; }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
+            <label><span>Start date</span><input type="date" max={PLANNING_MAX_DATE} defaultValue={sprint.startDate} disabled={!canEdit} aria-label={`Start date for ${sprint.name}`} onBlur={(event) => { if (!updateSprint(sprint.id, { startDate: event.target.value })) event.currentTarget.value = sprint.startDate; }} /></label>
+            <label><span>End date</span><input type="date" max={PLANNING_MAX_DATE} defaultValue={sprint.endDate} disabled={!canEdit} aria-label={`End date for ${sprint.name}`} onBlur={(event) => { if (!updateSprint(sprint.id, { endDate: event.target.value })) event.currentTarget.value = sprint.endDate; }} /></label>
             <strong>{reportingWeeks(sprint.startDate, "sprint", [sprint]).length} {reportingWeeks(sprint.startDate, "sprint", [sprint]).length === 1 ? "workweek" : "workweeks"}</strong>
-            <button type="button" onClick={() => deleteSprint(sprint.id)} aria-label={`Delete ${sprint.name}`} title="Delete sprint definition; weekly data is preserved"><Trash2 size={16} /></button>
+            <button type="button" onClick={() => deleteSprint(sprint.id)} disabled={!canEdit} aria-label={`Delete ${sprint.name}`} title={canEdit ? "Delete sprint definition; weekly data is preserved" : "Owner/admin access required"}><Trash2 size={16} /></button>
           </div>) : <div className="work-empty sprint-empty">No sprints configured. Add one below to enable the Every sprint view.</div>}
         </div>
         <form className="sprint-add-form" onSubmit={addSprint}>
-          <label><span>Sprint name</span><input value={sprintDraft.name} onChange={(event) => setSprintDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Sprint 1" required /></label>
-          <label><span>Start date</span><input type="date" max={PLANNING_MAX_DATE} value={sprintDraft.startDate} onChange={(event) => setSprintDraft((current) => ({ ...current, startDate: event.target.value }))} required /></label>
-          <label><span>End date</span><input type="date" max={PLANNING_MAX_DATE} value={sprintDraft.endDate} onChange={(event) => setSprintDraft((current) => ({ ...current, endDate: event.target.value }))} required /></label>
-          <button className="secondary-button" type="submit"><Plus size={15} /> Add sprint</button>
+          <label><span>Sprint name</span><input value={sprintDraft.name} disabled={!canEdit} onChange={(event) => setSprintDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Sprint 1" required /></label>
+          <label><span>Start date</span><input type="date" max={PLANNING_MAX_DATE} value={sprintDraft.startDate} disabled={!canEdit} onChange={(event) => setSprintDraft((current) => ({ ...current, startDate: event.target.value }))} required /></label>
+          <label><span>End date</span><input type="date" max={PLANNING_MAX_DATE} value={sprintDraft.endDate} disabled={!canEdit} onChange={(event) => setSprintDraft((current) => ({ ...current, endDate: event.target.value }))} required /></label>
+          <button className="secondary-button" type="submit" disabled={!canEdit}><Plus size={15} /> Add sprint</button>
         </form>
       </section>
       <div className="selection-group-grid">
@@ -540,13 +571,13 @@ export function SelectionManagerView({ state, onChange }: TrackingViewProps) {
               const used = usageCount(group.key, option);
               const isProtected = PROTECTED_OPTIONS[group.key].has(option);
               return <div className="selection-option-row" key={option}>
-                <input key={`${group.key}-${option}`} defaultValue={option} readOnly={isProtected} aria-label={`${group.label} option ${option}`} onBlur={(event) => { if (!renameOption(group.key, option, event.target.value)) event.currentTarget.value = option; }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
+                <input key={`${group.key}-${option}`} defaultValue={option} readOnly={isProtected || !canEdit} aria-label={`${group.label} option ${option}`} onBlur={(event) => { if (!renameOption(group.key, option, event.target.value)) event.currentTarget.value = option; }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
                 <span>{isProtected ? "Protected" : used ? `${used} ${used === 1 ? "task" : "tasks"}` : "Unused"}</span>
-                <button type="button" onClick={() => deleteOption(group.key, option)} disabled={isProtected || used > 0 || state.options[group.key].length === 1} aria-label={`Delete ${option}`} title={isProtected ? "Protected reporting option" : used ? "Option is currently in use" : "Delete option"}><Trash2 size={15} /></button>
+                <button type="button" onClick={() => deleteOption(group.key, option)} disabled={!canEdit || isProtected || used > 0 || state.options[group.key].length === 1} aria-label={`Delete ${option}`} title={!canEdit ? "Owner/admin access required" : isProtected ? "Protected reporting option" : used ? "Option is currently in use" : "Delete option"}><Trash2 size={15} /></button>
               </div>;
             })}
           </div>
-          <div className="selection-add-row"><input value={drafts[group.key]} onChange={(event) => setDrafts((current) => ({ ...current, [group.key]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addOption(group.key); } }} placeholder={`Add ${group.label.toLocaleLowerCase().replace(/s$/, "")}`} aria-label={`Add ${group.label} option`} /><button className="secondary-button" type="button" onClick={() => addOption(group.key)}><Plus size={15} /> Add</button></div>
+          <div className="selection-add-row"><input value={drafts[group.key]} disabled={!canEdit} onChange={(event) => setDrafts((current) => ({ ...current, [group.key]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addOption(group.key); } }} placeholder={`Add ${group.label.toLocaleLowerCase().replace(/s$/, "")}`} aria-label={`Add ${group.label} option`} /><button className="secondary-button" type="button" disabled={!canEdit} onClick={() => addOption(group.key)}><Plus size={15} /> Add</button></div>
         </section>)}
       </div>
       <div className="timesheet-rule-banner ready"><strong>Reporting safeguards</strong><span>Legal, Ethics and Compliance, Real Estate, Audit and Risk, Corporate Communications, Innovation, Test, Planning, and Execution values are protected because the Timesheet exclusion and utilization formulas depend on them.</span></div>
@@ -577,6 +608,7 @@ export function WorkDashboardView({ state, onChange, personName }: TrackingViewP
       utilized,
       testCases: entries.reduce((total, entry) => total + entry.testCaseCount, 0),
       bugs: entries.reduce((total, entry) => total + entry.bugCount, 0),
+      holidays: Array.from(new Set(entries.map((entry) => entry.holidayName).filter((name): name is string => Boolean(name)))),
     };
   }), [selectedWeeks, state]);
 
@@ -670,7 +702,7 @@ export function WorkDashboardView({ state, onChange, personName }: TrackingViewP
         <div className="work-panel-heading"><div><p className="eyebrow">Weekly controls</p><h2>Requirement and delivery health</h2></div><span>{selectedWeeks.length} selected {selectedWeeks.length === 1 ? "week" : "weeks"}</span></div>
         <div className="work-table-scroll">
           <table className="work-table dashboard-week-table">
-            <thead><tr><th>Week range</th><th>Actuals</th><th>Effort Plan</th><th>Eligible Actuals</th><th>Timesheet</th><th>Utilized</th><th>Utilization</th><th>Test cases</th><th>Bugs</th></tr></thead>
+            <thead><tr><th>Week range</th><th>Actuals</th><th>Effort Plan</th><th>Eligible Actuals</th><th>Timesheet</th><th>Utilized</th><th>Utilization</th><th>Test cases</th><th>Bugs</th><th>Public holidays</th></tr></thead>
             <tbody>{weeklyMetrics.map((week) => <tr key={week.week}>
               <td><strong>{formatWeekRange(week.week)}</strong></td>
               <td><strong>{formatHours(week.actual)}h</strong><small className={week.actual >= REQUIRED_WEEKLY_HOURS ? "metric-pass" : "metric-gap"}>{week.actual >= REQUIRED_WEEKLY_HOURS ? "Meets minimum" : `${formatHours(REQUIRED_WEEKLY_HOURS - week.actual)}h short`}</small></td>
@@ -679,7 +711,7 @@ export function WorkDashboardView({ state, onChange, personName }: TrackingViewP
               <td><strong>{formatHours(week.reportTotal)}h</strong><small className={Math.abs(week.reportTotal - REQUIRED_WEEKLY_HOURS) < .001 ? "metric-pass" : "metric-gap"}>{Math.abs(week.reportTotal - REQUIRED_WEEKLY_HOURS) < .001 ? "Exactly 45h" : "Not ready"}</small></td>
               <td>{formatHours(week.utilized)}h</td>
               <td>{((week.utilized / REQUIRED_WEEKLY_HOURS) * 100).toFixed(1)}%</td>
-              <td>{week.testCases}</td><td>{week.bugs}</td>
+              <td>{week.testCases}</td><td>{week.bugs}</td><td>{week.holidays.length ? week.holidays.join(", ") : "—"}</td>
             </tr>)}</tbody>
           </table>
         </div>
@@ -705,6 +737,7 @@ export function TimesheetReportView({ state, onChange, personName }: TrackingVie
   const [leaveType, setLeaveType] = useState(state.options.leaveTypes[0] ?? "Vacation Leave");
   const [leaveStart, setLeaveStart] = useState("08:00");
   const [leaveEnd, setLeaveEnd] = useState("17:00");
+  const [holidayName, setHolidayName] = useState("");
   const [leaveDetails, setLeaveDetails] = useState("");
   const [leaveMessage, setLeaveMessage] = useState("");
   const initialUtilizedTask = state.workItems.find((item) => item.taskType === "Test" && /planning|execution/i.test(item.phase));
@@ -807,6 +840,11 @@ export function TimesheetReportView({ state, onChange, personName }: TrackingVie
       setLeaveMessage("End time must be later than start time.");
       return;
     }
+    const isPublicHoliday = leaveType.trim().toLocaleLowerCase() === "public holiday";
+    if (isPublicHoliday && !holidayName.trim()) {
+      setLeaveMessage("Specify the public holiday name.");
+      return;
+    }
     const targetWeek = weekStartFromDate(leaveDate);
     onChange((current) => {
       const existing = current.workItems.find((item) => item.taskType === "PTO" && item.title === leaveType);
@@ -831,7 +869,8 @@ export function TimesheetReportView({ state, onChange, personName }: TrackingVie
         startTime: leaveStart,
         endTime: leaveEnd,
         workItemId,
-        details: leaveDetails.trim() || `Scheduled ${leaveType.toLocaleLowerCase()} in advance.`,
+        holidayName: isPublicHoliday ? holidayName.trim() : undefined,
+        details: leaveDetails.trim() || (isPublicHoliday ? `${holidayName.trim()} · Philippines` : `Scheduled ${leaveType.toLocaleLowerCase()} in advance.`),
         testCaseCount: 0,
         bugCount: 0,
         entrySource: "scheduled-advance",
@@ -844,6 +883,7 @@ export function TimesheetReportView({ state, onChange, personName }: TrackingVie
         timesheetWeek: targetWeek,
       };
     });
+    setHolidayName("");
     setLeaveDetails("");
     setLeaveMessage(`${formatHours(hours)}h ${leaveType.toLocaleLowerCase()} scheduled and shared with Actuals, Effort Plan, and Dashboard.`);
   }
@@ -913,12 +953,13 @@ export function TimesheetReportView({ state, onChange, personName }: TrackingVie
         <div className="work-panel-heading"><div><p className="eyebrow">Plan an absence</p><h2>Schedule leave or holiday in advance</h2></div><span>Flows to all four reporting pages</span></div>
         <form className="advance-leave-form" onSubmit={scheduleLeave}>
           <label className="field-label">Date<input type="date" max={PLANNING_MAX_DATE} value={leaveDate} onChange={(event) => setLeaveDate(event.target.value)} required /></label>
-          <label className="field-label">Type<select value={leaveType} onChange={(event) => setLeaveType(event.target.value)}>{state.options.leaveTypes.map((value) => <option key={value}>{value}</option>)}</select></label>
+          <label className="field-label">Type<select value={leaveType} onChange={(event) => { setLeaveType(event.target.value); if (event.target.value.trim().toLocaleLowerCase() !== "public holiday") setHolidayName(""); }}>{state.options.leaveTypes.map((value) => <option key={value}>{value}</option>)}</select></label>
           <label className="field-label">Start time<input type="time" value={leaveStart} onChange={(event) => setLeaveStart(event.target.value)} required /></label>
           <label className="field-label">End time<input type="time" value={leaveEnd} onChange={(event) => setLeaveEnd(event.target.value)} required /></label>
-          <label className="field-label advance-leave-details">Details<input value={leaveDetails} onChange={(event) => setLeaveDetails(event.target.value)} placeholder="Optional note or holiday name" /></label>
+          <label className="field-label">Holiday name<input value={holidayName} disabled={leaveType.trim().toLocaleLowerCase() !== "public holiday"} onChange={(event) => setHolidayName(event.target.value)} placeholder={leaveType.trim().toLocaleLowerCase() === "public holiday" ? "e.g., National Heroes Day" : "Not applicable"} required={leaveType.trim().toLocaleLowerCase() === "public holiday"} /></label>
+          <label className="field-label advance-leave-details">Details<input value={leaveDetails} onChange={(event) => setLeaveDetails(event.target.value)} placeholder="Optional note" /></label>
           <button className="primary-button" type="submit"><Plus size={16} /> Schedule {formatHours(hoursBetween(leaveStart, leaveEnd))}h</button>
-          <span className={leaveMessage.includes("must") ? "form-message error" : "form-message"}>{leaveMessage}</span>
+          <span className={leaveMessage.includes("must") || leaveMessage.includes("Specify") ? "form-message error" : "form-message"}>{leaveMessage}</span>
         </form>
       </div>
 
@@ -927,7 +968,7 @@ export function TimesheetReportView({ state, onChange, personName }: TrackingVie
         <div className="work-table-scroll">
           <table className="work-table timesheet-table">
             <thead><tr><th>Task type</th><th>Task</th><th>Subcategory</th>{dates.map((day, index) => <th key={day}>{WEEKDAY_LABELS[index]}<small>{formatShortDate(day)}</small></th>)}<th>Total</th></tr><tr className="day-total-row"><th colSpan={3}>Included day totals</th>{dayTotals.map((total, index) => <th key={dates[index]}>{formatHours(total)}</th>)}<th>{formatHours(reportTotal)}</th></tr></thead>
-            <tbody>{rows.length ? rows.map((row) => <tr key={row.workItem.id} className={row.excluded ? "innovation-row" : ""}><td><span>{row.workItem.taskType}</span>{row.excluded && <small className="innovation-note">Excluded</small>}</td><td><strong>[{row.workItem.workstream}] {row.workItem.title}</strong><small>{row.workItem.application || "No application"}</small>{!row.excluded && dates.some((date) => timesheetOverrideKey(week, row.workItem.id, date) in state.timesheetOverrides) && <button className="reset-row-overrides" type="button" onClick={() => resetTimesheetOverride(row.workItem.id)}>Reset row to Actuals</button>}</td><td>{row.workItem.phase || "—"}</td>{row.hours.map((hours, index) => {
+            <tbody>{rows.length ? rows.map((row) => <tr key={row.workItem.id} className={row.excluded ? "innovation-row" : ""}><td><span>{row.workItem.taskType}</span>{row.excluded && <small className="innovation-note">Excluded</small>}</td><td><strong>[{row.workItem.workstream}] {workItemDisplayTitleForWeek(state, row.workItem, week)}</strong><small>{row.workItem.application || "No application"}</small>{!row.excluded && dates.some((date) => timesheetOverrideKey(week, row.workItem.id, date) in state.timesheetOverrides) && <button className="reset-row-overrides" type="button" onClick={() => resetTimesheetOverride(row.workItem.id)}>Reset row to Actuals</button>}</td><td>{row.workItem.phase || "—"}</td>{row.hours.map((hours, index) => {
               const overrideKey = timesheetOverrideKey(week, row.workItem.id, dates[index]);
               const overridden = overrideKey in state.timesheetOverrides;
               return <td key={dates[index]}>{row.excluded ? (hours ? formatHours(hours) : "—") : <div className={`timesheet-edit-cell ${overridden ? "overridden" : ""}`}><input key={`${overrideKey}-${hours}`} type="number" min="0" max="24" step="0.25" defaultValue={formatHours(hours)} aria-label={`${row.workItem.title} hours for ${dates[index]}`} onBlur={(event) => setTimesheetOverride(row.workItem.id, dates[index], event.target.value)} />{overridden && <button type="button" onClick={() => resetTimesheetOverride(row.workItem.id, dates[index])} aria-label={`Reset ${row.workItem.title} for ${dates[index]}`} title="Reset to Actuals-derived value">↺</button>}</div>}</td>;

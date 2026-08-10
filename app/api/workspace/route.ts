@@ -1,8 +1,8 @@
 import { cookies } from "next/headers";
 import { getOrbitWorkspace, normalizeScheduleWindow, saveOrbitWorkspace, type ScheduleWindow } from "../../../lib/orbit-db";
-import { ORBIT_SESSION_COOKIE, verifyOrbitSession } from "../../../lib/orbit-auth";
+import { canEditSelectionManager, ORBIT_SESSION_COOKIE, verifyOrbitSession } from "../../../lib/orbit-auth";
 import { normalizeFocusHistory, normalizeFocusTimer, type FocusHistoryEntry, type FocusTimerState } from "../../../lib/focus-timer";
-import { normalizeWorkTracking, type WorkTrackingState } from "../../../lib/work-tracking";
+import { createDefaultWorkTrackingState, normalizeWorkTracking, type WorkTrackingState } from "../../../lib/work-tracking";
 
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_TASKS = 2_000;
@@ -83,6 +83,15 @@ export async function PUT(request: Request) {
         return Response.json({ error: "Work tracking data has too many items" }, { status: 413 });
       }
       workTracking = normalizeWorkTracking(body.workTracking);
+      if (!canEditSelectionManager(user)) {
+        const existingWorkspace = await getOrbitWorkspace(user.id);
+        const existingTracking = existingWorkspace?.workTracking ?? createDefaultWorkTrackingState();
+        const selectionChanged = JSON.stringify(workTracking.options) !== JSON.stringify(existingTracking.options)
+          || JSON.stringify(workTracking.sprints) !== JSON.stringify(existingTracking.sprints);
+        if (selectionChanged) {
+          return Response.json({ error: "Owner or admin access is required to edit Selection Manager" }, { status: 403 });
+        }
+      }
     }
 
     const workspace = await saveOrbitWorkspace(user.id, body.tasks, body.projects, schedule, focusTimer, focusHistory, workTracking);

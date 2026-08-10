@@ -49,7 +49,7 @@ export const PHILIPPINE_HOLIDAYS_2026 = [
   { date: "2026-12-30", name: "Rizal Day", classification: "Regular holiday" },
   { date: "2026-12-31", name: "Last Day of the Year", classification: "Special non-working day" },
 ] as const;
-const PHILIPPINE_HOLIDAY_SEED_VERSION = 1;
+const PHILIPPINE_HOLIDAY_SEED_VERSION = 2;
 
 export type Workstream = string;
 export type TaskType = string;
@@ -102,6 +102,7 @@ export type ActualEntry = {
   startTime: string;
   endTime: string;
   workItemId: string;
+  holidayName?: string;
   details: string;
   testCaseCount: number;
   bugCount: number;
@@ -284,6 +285,18 @@ export function workItemActualHoursForWeek(state: WorkTrackingState, workItemId:
     .reduce((total, entry) => total + hoursBetween(entry.startTime, entry.endTime), 0);
 }
 
+export function publicHolidayNamesForWorkItemWeek(state: WorkTrackingState, workItemId: string, weekStart: string) {
+  return Array.from(new Set(entriesForWorkweek(state, weekStart)
+    .filter((entry) => entry.workItemId === workItemId)
+    .map((entry) => entry.holidayName?.trim())
+    .filter((name): name is string => Boolean(name))));
+}
+
+export function workItemDisplayTitleForWeek(state: WorkTrackingState, workItem: WorkItem, weekStart: string) {
+  const holidayNames = publicHolidayNamesForWorkItemWeek(state, workItem.id, weekStart);
+  return holidayNames.length ? `${workItem.title} — ${holidayNames.join(", ")}` : workItem.title;
+}
+
 function quarterHourDistribution(values: number[], target: number) {
   if (target <= 0 || !values.some((value) => value > 0)) return values.map(() => 0);
   const total = values.reduce((sum, value) => sum + value, 0);
@@ -357,6 +370,7 @@ export function createDefaultWorkTrackingState(now = new Date()): WorkTrackingSt
       startTime: "08:00",
       endTime: "17:00",
       workItemId: holidayWorkItem.id,
+      holidayName: holiday.name,
       details: `${holiday.name} · Philippines · ${holiday.classification}`,
       testCaseCount: 0,
       bugCount: 0,
@@ -411,6 +425,7 @@ function normalizeActualEntry(value: unknown): ActualEntry | null {
     startTime: entry.startTime!,
     endTime: entry.endTime!,
     workItemId,
+    holidayName: cleanText(entry.holidayName, 300) || undefined,
     details: cleanText(entry.details, 2000),
     testCaseCount: Number.isSafeInteger(Number(entry.testCaseCount)) && Number(entry.testCaseCount) >= 0 ? Math.min(Number(entry.testCaseCount), 100_000) : 0,
     bugCount: Number.isSafeInteger(Number(entry.bugCount)) && Number(entry.bugCount) >= 0 ? Math.min(Number(entry.bugCount), 100_000) : 0,
@@ -439,7 +454,7 @@ export function normalizeWorkTracking(value: unknown, now = new Date()): WorkTra
     ? candidate.actualEntries.map(normalizeActualEntry).filter((entry): entry is ActualEntry => entry !== null).filter((entry) => itemIds.has(entry.workItemId)).slice(0, 5_000)
     : [];
   const candidateHolidaySeedVersion = Number.isSafeInteger(Number(candidate.holidaySeedVersion)) ? Number(candidate.holidaySeedVersion) : 0;
-  if (candidateHolidaySeedVersion < PHILIPPINE_HOLIDAY_SEED_VERSION) {
+  if (candidateHolidaySeedVersion < 1) {
     const defaultHolidayItem = fallback.workItems[0];
     let holidayItem = workItems.find((item) => item.taskType === "PTO" && item.phase === "Holiday" && item.title === "Public Holiday");
     if (!holidayItem) {
@@ -454,6 +469,17 @@ export function normalizeWorkTracking(value: unknown, now = new Date()): WorkTra
     });
     workItems = workItems.map((item) => item.id === holidayItem.id ? { ...item, plannedHoursByWeek } : item);
     actualEntries = [...actualEntries, ...additions.map((entry) => ({ ...entry, workItemId: holidayItem!.id }))].slice(0, 5_000);
+  }
+  if (candidateHolidaySeedVersion < 2) {
+    const officialHolidayNames = new Map<string, string>(PHILIPPINE_HOLIDAYS_2026.map((holiday) => [holiday.date, holiday.name]));
+    const workItemById = new Map(workItems.map((item) => [item.id, item]));
+    actualEntries = actualEntries.map((entry) => {
+      const item = workItemById.get(entry.workItemId);
+      const holidayName = officialHolidayNames.get(entry.date);
+      return holidayName && item?.taskType === "PTO" && item.phase === "Holiday"
+        ? { ...entry, holidayName: entry.holidayName || holidayName }
+        : entry;
+    });
   }
   const selectedEffortWeeks = Array.isArray(candidate.selectedEffortWeeks)
     ? Array.from(new Set(candidate.selectedEffortWeeks.filter((week): week is string => typeof week === "string" && ISO_DATE_PATTERN.test(week)).map(weekStartFromDate))).slice(0, 60)

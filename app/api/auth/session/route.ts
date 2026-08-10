@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { ORBIT_SESSION_COOKIE, verifyOrbitSession } from "../../../../lib/orbit-auth";
+import { canEditSelectionManager, ORBIT_SESSION_COOKIE, verifyOrbitSession } from "../../../../lib/orbit-auth";
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -16,5 +16,10 @@ export async function GET() {
     });
     return response;
   }
-  return NextResponse.json({ user }, { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json({
+    user: {
+      ...user,
+      canEditSelectionManager: canEditSelectionManager(user),
+    },
+  }, { headers: { "Cache-Control": "no-store" } });
 }

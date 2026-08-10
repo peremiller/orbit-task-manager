@@ -2,10 +2,13 @@ import { createHmac, scryptSync, timingSafeEqual } from "node:crypto";
 
 export const ORBIT_SESSION_COOKIE = "orbit_session";
 
+export type OrbitRole = "owner" | "admin" | "member";
+
 export type OrbitUser = {
   id: string;
   username: string;
   displayName: string;
+  role: OrbitRole;
 };
 
 type SessionPayload = OrbitUser & {
@@ -16,6 +19,7 @@ const DEFAULT_USER: OrbitUser = {
   id: "aj-miller",
   username: "aj.miller",
   displayName: "AJ Miller",
+  role: "owner",
 };
 
 const PASSWORD_SALT = "orbit-aj-2026-v1";
@@ -24,8 +28,8 @@ const DEVELOPMENT_SESSION_SECRET = "orbit-local-development-session-secret";
 const SESSION_LIFETIME_SECONDS = 60 * 60 * 24 * 7;
 
 export function authenticateOrbitUser(username: string, password: string): OrbitUser | null {
-  const normalizedUsername = username.trim().toLowerCase();
-  const expectedUsername = process.env.ORBIT_ADMIN_USERNAME?.trim().toLowerCase() ?? DEFAULT_USER.username;
+  const normalizedUsername = normalizeUsername(username);
+  const expectedUsername = normalizeUsername(process.env.ORBIT_ADMIN_USERNAME ?? DEFAULT_USER.username);
   if (!safeTextEqual(normalizedUsername, expectedUsername)) return null;
 
   const suppliedHash = scryptSync(password, process.env.ORBIT_PASSWORD_SALT ?? PASSWORD_SALT, 64);
@@ -36,6 +40,7 @@ export function authenticateOrbitUser(username: string, password: string): Orbit
     id: process.env.ORBIT_ADMIN_USER_ID ?? DEFAULT_USER.id,
     username: expectedUsername,
     displayName: process.env.ORBIT_ADMIN_DISPLAY_NAME ?? DEFAULT_USER.displayName,
+    role: privilegedRole(process.env.ORBIT_ADMIN_ROLE, expectedUsername),
   };
 }
 
@@ -55,12 +60,21 @@ export function verifyOrbitSession(token: string | undefined): OrbitUser | null 
   if (!safeTextEqual(suppliedSignature, sign(encodedPayload))) return null;
 
   try {
-    const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as SessionPayload;
-    if (!payload.id || !payload.username || !payload.displayName || payload.expiresAt <= Math.floor(Date.now() / 1000)) return null;
-    return { id: payload.id, username: payload.username, displayName: payload.displayName };
+    const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as Partial<SessionPayload>;
+    if (!payload.id || !payload.username || !payload.displayName || typeof payload.expiresAt !== "number" || payload.expiresAt <= Math.floor(Date.now() / 1000)) return null;
+    return {
+      id: payload.id,
+      username: payload.username,
+      displayName: payload.displayName,
+      role: normalizeRole(payload.role) ?? privilegedRole(undefined, payload.username),
+    };
   } catch {
     return null;
   }
+}
+
+export function canEditSelectionManager(user: Pick<OrbitUser, "username" | "role">): boolean {
+  return normalizeUsername(user.username) === DEFAULT_USER.username && (user.role === "owner" || user.role === "admin");
 }
 
 export function safeReturnTo(value: string | null | undefined): string {
@@ -86,4 +100,18 @@ function safeTextEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function normalizeUsername(username: string): string {
+  return username.trim().toLowerCase().replace(/^@/, "");
+}
+
+function normalizeRole(role: unknown): OrbitRole | null {
+  return role === "owner" || role === "admin" || role === "member" ? role : null;
+}
+
+function privilegedRole(role: unknown, username: string): Extract<OrbitRole, "owner" | "admin"> {
+  const normalizedRole = normalizeRole(role);
+  if (normalizedRole === "owner" || normalizedRole === "admin") return normalizedRole;
+  return normalizeUsername(username) === DEFAULT_USER.username ? "owner" : "admin";
 }

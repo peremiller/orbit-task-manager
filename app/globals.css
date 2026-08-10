@@ -814,6 +814,7 @@ kbd { font-family: inherit; }
 .effort-plan-table input, .effort-plan-table select, .effort-plan-table textarea { width: 100%; min-width: 120px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); color: var(--ink); font-size: 9px; }
 .effort-plan-table td:nth-child(4) { min-width: 250px; }
 .effort-plan-table td:nth-child(4) input { margin-bottom: 5px; }
+.holiday-name-note { display: block; margin-top: 6px; color: #9a5e00; font-size: 8px; font-weight: 700; line-height: 1.4; }
 .effort-plan-table .hours-input { min-width: 74px; text-align: right; }
 .use-actual-button { margin-top: 5px; padding: 0; border: 0; background: transparent; color: var(--blue); font-size: 8px; font-weight: 700; }
 .read-only-hours { background: #f7f9ff !important; text-align: center; }
@@ -840,7 +841,7 @@ kbd { font-family: inherit; }
 .timesheet-period-table { min-width: 820px; }
 .advance-entry-badge { display: inline-flex; margin-left: 8px; padding: 3px 7px; border-radius: 999px; background: #fff4d6; color: #9a5e00; font-size: 7px; font-style: normal; font-weight: 740; vertical-align: middle; }
 .advance-entry-badge.utilized { background: #eaf9f1; color: #08794f; }
-.advance-leave-form { display: grid; grid-template-columns: 150px 180px 120px 120px minmax(210px, 1fr) auto; align-items: end; gap: 13px; padding: 18px 20px; }
+.advance-leave-form { display: grid; grid-template-columns: 140px 165px 110px 110px minmax(180px, .9fr) minmax(190px, 1fr) auto; align-items: end; gap: 13px; padding: 18px 20px; }
 .advance-leave-form input, .advance-leave-form select { width: 100%; }
 .advance-leave-form > .form-message { grid-column: 1 / -1; margin: 0; }
 .timesheet-edit-cell { position: relative; min-width: 66px; display: inline-flex; align-items: center; gap: 3px; }
@@ -876,7 +877,7 @@ kbd { font-family: inherit; }
 .dashboard-chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .dashboard-chart-legend i { width: 16px; height: 5px; display: block; border-radius: 4px; }
 .dashboard-chart-legend i.target { height: 0; border-top: 1px dashed #ec8e36; border-radius: 0; }
-.dashboard-week-table { min-width: 1120px; }
+.dashboard-week-table { min-width: 1280px; }
 .dashboard-week-table td:not(:first-child), .dashboard-week-table th:not(:first-child), .dashboard-workstream-table td:not(:first-child), .dashboard-workstream-table th:not(:first-child) { text-align: right; }
 .dashboard-week-table td:first-child { min-width: 180px; }
 .dashboard-workstream-table { min-width: 900px; }
@@ -896,6 +897,7 @@ kbd { font-family: inherit; }
 .sprint-row input, .sprint-add-form input { width: 100%; height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); color: var(--ink); font-size: 10px; font-weight: 620; letter-spacing: 0; text-transform: none; }
 .sprint-row > strong { align-self: center; color: var(--blue); font-size: 9px; text-align: right; }
 .sprint-row > button { width: 36px; height: 36px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); color: #c9374c; }
+.selection-manager-view input:disabled, .selection-manager-view button:disabled { cursor: not-allowed; opacity: .58; }
 .sprint-empty { padding: 24px; text-align: center; }
 .sprint-add-form { display: grid; grid-template-columns: minmax(180px, 1fr) 150px 150px auto; align-items: end; gap: 12px; padding: 15px 16px; background: rgba(244,246,249,.72); }
 .selection-group-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
