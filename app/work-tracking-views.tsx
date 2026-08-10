@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import { ArrowLeft, ArrowRight, CheckCircle2, Download, FileDown, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, Download, FileDown, Pencil, Plus, Trash2, TriangleAlert, X } from "lucide-react";
 import {
   REQUIRED_WEEKLY_HOURS,
   WEEKDAY_LABELS,
@@ -58,6 +58,13 @@ const NEW_UTILIZED_TASK = "__new-utilized-task";
 
 function newId(prefix: string) {
   return `${prefix}-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+function endTimeForHours(startTime: string, hours: number) {
+  const [startHour, startMinute] = startTime.split(":").map(Number);
+  if (!Number.isFinite(startHour) || !Number.isFinite(startMinute)) return startTime;
+  const totalMinutes = Math.min(24 * 60 - 1, Math.max(0, (startHour * 60) + startMinute + Math.round(hours * 60)));
+  return `${String(Math.floor(totalMinutes / 60)).padStart(2, "0")}:${String(totalMinutes % 60).padStart(2, "0")}`;
 }
 
 const PLANNING_MAX_DATE = maximumPlanningDate();
@@ -144,6 +151,8 @@ export function ActualsView({ state, onChange, orbitTasks, personName }: Trackin
   const [testCaseCount, setTestCaseCount] = useState(0);
   const [bugCount, setBugCount] = useState(0);
   const [itemDraft, setItemDraft] = useState(DEFAULT_ITEM_DRAFT);
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [entryDraft, setEntryDraft] = useState<Pick<ActualEntry, "startTime" | "endTime" | "testCaseCount" | "bugCount">>({ startTime: "", endTime: "", testCaseCount: 0, bugCount: 0 });
   const [message, setMessage] = useState("");
   const periodWeeks = availableReportingWeeks(week, periodMode, state.sprints);
   const dates = weekdayDates(weekStartFromDate(week));
@@ -228,11 +237,47 @@ export function ActualsView({ state, onChange, orbitTasks, personName }: Trackin
     });
   }
 
+  function beginEntryEdit(entry: ActualEntry) {
+    setEditingEntryId(entry.id);
+    setEntryDraft({ startTime: entry.startTime, endTime: entry.endTime, testCaseCount: entry.testCaseCount, bugCount: entry.bugCount });
+    setMessage("");
+  }
+
+  function saveEntryEdit(entry: ActualEntry) {
+    const hours = hoursBetween(entryDraft.startTime, entryDraft.endTime);
+    if (!hours) {
+      setMessage("End time must be later than start time.");
+      return;
+    }
+    const previousHours = hoursBetween(entry.startTime, entry.endTime);
+    onChange((current) => ({
+      ...current,
+      actualEntries: current.actualEntries.map((candidate) => candidate.id === entry.id ? {
+        ...candidate,
+        startTime: entryDraft.startTime,
+        endTime: entryDraft.endTime,
+        testCaseCount: Math.max(0, Math.floor(entryDraft.testCaseCount)),
+        bugCount: Math.max(0, Math.floor(entryDraft.bugCount)),
+      } : candidate),
+      workItems: entry.entrySource === "scheduled-advance" || entry.entrySource === "timesheet-source"
+        ? current.workItems.map((item) => item.id === entry.workItemId ? {
+          ...item,
+          plannedHoursByWeek: {
+            ...item.plannedHoursByWeek,
+            [weekStartFromDate(entry.date)]: Math.max(0, (item.plannedHoursByWeek[weekStartFromDate(entry.date)] ?? 0) - previousHours + hours),
+          },
+        } : item)
+        : current.workItems,
+    }));
+    setEditingEntryId(null);
+    setMessage("Actual hours, test cases, and bugs updated across all connected reports.");
+  }
+
   const exportWeek = () => exportWorkTrackingWorkbooks({ state, weeks: [week], personName });
   const exportSelected = () => exportWorkTrackingWorkbooks({ state, weeks: periodWeeks, personName });
 
   return (
-    <div className="view-stack work-view">
+    <div className="view-stack work-view actuals-view">
       <div className="work-toolbar">
         <label className="work-week-control"><span>Workweek</span><input type="date" max={PLANNING_MAX_DATE} value={week} onChange={(event) => setWeek(weekStartFromDate(event.target.value))} /></label>
         <span className="work-range-label">{formatReportingPeriod(week, periodMode, undefined, state.sprints)}</span>
@@ -298,7 +343,8 @@ export function ActualsView({ state, onChange, orbitTasks, personName }: Trackin
         <div className="work-panel-heading"><div><p className="eyebrow">Entry detail</p><h2>{formatReportingPeriod(week, periodMode, undefined, state.sprints)}</h2></div><span>{weekEntries.length} entries</span></div>
         <div className="actual-entry-list">{weekEntries.length ? weekEntries.map((entry) => {
           const item = state.workItems.find((candidate) => candidate.id === entry.workItemId);
-          return <article key={entry.id}><div><strong>{item?.title ?? "Unknown task"}{entry.holidayName ? ` — ${entry.holidayName}` : ""}{entry.entrySource === "scheduled-advance" && <em className="advance-entry-badge">Scheduled in advance</em>}{entry.entrySource === "timesheet-source" && <em className="advance-entry-badge utilized">Entered from Timesheet</em>}</strong><span>{entry.date} · {entry.startTime}–{entry.endTime} · {formatHours(hoursBetween(entry.startTime, entry.endTime))}h · {entry.testCaseCount} test cases · {entry.bugCount} bugs</span><p>{entry.details || item?.notes || "No additional details"}</p></div><button type="button" onClick={() => removeEntry(entry.id)} aria-label={`Delete ${entry.holidayName || item?.title || "entry"}`}><Trash2 size={16} /></button></article>;
+          const isEditing = editingEntryId === entry.id;
+          return <article key={entry.id} className={isEditing ? "editing" : ""}><div><strong>{item?.title ?? "Unknown task"}{entry.holidayName ? ` — ${entry.holidayName}` : ""}{entry.entrySource === "scheduled-advance" && <em className="advance-entry-badge">Scheduled in advance</em>}{entry.entrySource === "timesheet-source" && <em className="advance-entry-badge utilized">Entered from Timesheet</em>}</strong>{isEditing ? <div className="actual-entry-edit-grid"><label>Start time<input type="time" value={entryDraft.startTime} onChange={(event) => setEntryDraft({ ...entryDraft, startTime: event.target.value })} /></label><label>End time<input type="time" value={entryDraft.endTime} onChange={(event) => setEntryDraft({ ...entryDraft, endTime: event.target.value })} /></label><label>Actual hours<input type="number" min="0.25" max="23.75" step="0.25" value={formatHours(hoursBetween(entryDraft.startTime, entryDraft.endTime))} onChange={(event) => setEntryDraft({ ...entryDraft, endTime: endTimeForHours(entryDraft.startTime, Number(event.target.value)) })} /></label><label>Test cases<input type="number" min="0" step="1" value={entryDraft.testCaseCount} onChange={(event) => setEntryDraft({ ...entryDraft, testCaseCount: Math.max(0, Number(event.target.value)) })} /></label><label>Bugs<input type="number" min="0" step="1" value={entryDraft.bugCount} onChange={(event) => setEntryDraft({ ...entryDraft, bugCount: Math.max(0, Number(event.target.value)) })} /></label></div> : <span>{entry.date} · {entry.startTime}–{entry.endTime} · {formatHours(hoursBetween(entry.startTime, entry.endTime))}h · {entry.testCaseCount} test cases · {entry.bugCount} bugs</span>}<p>{entry.details || item?.notes || "No additional details"}</p></div><div className="actual-entry-actions">{isEditing ? <><button type="button" onClick={() => setEditingEntryId(null)} aria-label="Cancel editing"><X size={16} /></button><button className="save" type="button" onClick={() => saveEntryEdit(entry)}>Save</button></> : <button type="button" onClick={() => beginEntryEdit(entry)} aria-label={`Edit ${entry.holidayName || item?.title || "entry"}`}><Pencil size={16} /></button>}<button type="button" onClick={() => removeEntry(entry.id)} aria-label={`Delete ${entry.holidayName || item?.title || "entry"}`}><Trash2 size={16} /></button></div></article>;
         }) : <p className="work-empty">Add your first entry above.</p>}</div>
       </div>
     </div>
