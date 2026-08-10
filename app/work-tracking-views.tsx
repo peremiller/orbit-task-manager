@@ -494,10 +494,6 @@ export function SelectionManagerView({ state, onChange, canEdit, editorUsername 
     }
     const next = nextValue.trim();
     if (!next || next === previous) return next === previous;
-    if (PROTECTED_OPTIONS[group].has(previous)) {
-      setMessage(`“${previous}” is protected because it supports a reporting rule.`);
-      return false;
-    }
     if (state.options[group].some((value) => value !== previous && value.toLocaleLowerCase() === next.toLocaleLowerCase())) {
       setMessage(`“${next}” already exists.`);
       return false;
@@ -515,7 +511,9 @@ export function SelectionManagerView({ state, onChange, canEdit, editorUsername 
         return item;
       }),
     }));
-    setMessage(`Renamed “${previous}” to “${next}” and updated its tasks.`);
+    setMessage(PROTECTED_OPTIONS[group].has(previous)
+      ? `Renamed reporting-linked value “${previous}” to “${next}” and updated its tasks.`
+      : `Renamed “${previous}” to “${next}” and updated its tasks.`);
     return true;
   }
 
@@ -571,8 +569,8 @@ export function SelectionManagerView({ state, onChange, canEdit, editorUsername 
               const used = usageCount(group.key, option);
               const isProtected = PROTECTED_OPTIONS[group.key].has(option);
               return <div className="selection-option-row" key={option}>
-                <input key={`${group.key}-${option}`} defaultValue={option} readOnly={isProtected || !canEdit} aria-label={`${group.label} option ${option}`} onBlur={(event) => { if (!renameOption(group.key, option, event.target.value)) event.currentTarget.value = option; }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
-                <span>{isProtected ? "Protected" : used ? `${used} ${used === 1 ? "task" : "tasks"}` : "Unused"}</span>
+                <input key={`${group.key}-${option}`} defaultValue={option} readOnly={!canEdit} aria-label={`${group.label} option ${option}`} title={isProtected && canEdit ? "Reporting-linked value · Owner can rename" : undefined} onBlur={(event) => { if (!renameOption(group.key, option, event.target.value)) event.currentTarget.value = option; }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
+                <span>{isProtected ? `Rule-linked${used ? ` · ${used} ${used === 1 ? "task" : "tasks"}` : ""}` : used ? `${used} ${used === 1 ? "task" : "tasks"}` : "Unused"}</span>
                 <button type="button" onClick={() => deleteOption(group.key, option)} disabled={!canEdit || isProtected || used > 0 || state.options[group.key].length === 1} aria-label={`Delete ${option}`} title={!canEdit ? "Owner/admin access required" : isProtected ? "Protected reporting option" : used ? "Option is currently in use" : "Delete option"}><Trash2 size={15} /></button>
               </div>;
             })}
@@ -580,7 +578,7 @@ export function SelectionManagerView({ state, onChange, canEdit, editorUsername 
           <div className="selection-add-row"><input value={drafts[group.key]} disabled={!canEdit} onChange={(event) => setDrafts((current) => ({ ...current, [group.key]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addOption(group.key); } }} placeholder={`Add ${group.label.toLocaleLowerCase().replace(/s$/, "")}`} aria-label={`Add ${group.label} option`} /><button className="secondary-button" type="button" disabled={!canEdit} onClick={() => addOption(group.key)}><Plus size={15} /> Add</button></div>
         </section>)}
       </div>
-      <div className="timesheet-rule-banner ready"><strong>Reporting safeguards</strong><span>Legal, Ethics and Compliance, Real Estate, Audit and Risk, Corporate Communications, Innovation, Test, Planning, and Execution values are protected because the Timesheet exclusion and utilization formulas depend on them.</span></div>
+      <div className="timesheet-rule-banner ready"><strong>Reporting safeguards</strong><span>Owner @aj.miller can rename reporting-linked values, and Orbit updates dependent tasks automatically. Deletion remains disabled for rule-linked or in-use values to prevent accidental reporting damage.</span></div>
     </div>
   );
 }
