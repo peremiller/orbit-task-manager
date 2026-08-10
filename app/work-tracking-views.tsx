@@ -152,7 +152,7 @@ export function ActualsView({ state, onChange, orbitTasks, personName }: Trackin
   const [bugCount, setBugCount] = useState(0);
   const [itemDraft, setItemDraft] = useState(DEFAULT_ITEM_DRAFT);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
-  const [entryDraft, setEntryDraft] = useState<Pick<ActualEntry, "startTime" | "endTime" | "testCaseCount" | "bugCount">>({ startTime: "", endTime: "", testCaseCount: 0, bugCount: 0 });
+  const [entryDraft, setEntryDraft] = useState<Pick<ActualEntry, "date" | "startTime" | "endTime" | "testCaseCount" | "bugCount">>({ date: "", startTime: "", endTime: "", testCaseCount: 0, bugCount: 0 });
   const [message, setMessage] = useState("");
   const periodWeeks = availableReportingWeeks(week, periodMode, state.sprints);
   const dates = weekdayDates(weekStartFromDate(week));
@@ -239,21 +239,28 @@ export function ActualsView({ state, onChange, orbitTasks, personName }: Trackin
 
   function beginEntryEdit(entry: ActualEntry) {
     setEditingEntryId(entry.id);
-    setEntryDraft({ startTime: entry.startTime, endTime: entry.endTime, testCaseCount: entry.testCaseCount, bugCount: entry.bugCount });
+    setEntryDraft({ date: entry.date, startTime: entry.startTime, endTime: entry.endTime, testCaseCount: entry.testCaseCount, bugCount: entry.bugCount });
     setMessage("");
   }
 
   function saveEntryEdit(entry: ActualEntry) {
+    if (!entryDraft.date || entryDraft.date > PLANNING_MAX_DATE) {
+      setMessage(`Choose a date through ${PLANNING_MAX_DATE}.`);
+      return;
+    }
     const hours = hoursBetween(entryDraft.startTime, entryDraft.endTime);
     if (!hours) {
       setMessage("End time must be later than start time.");
       return;
     }
     const previousHours = hoursBetween(entry.startTime, entry.endTime);
+    const previousWeek = weekStartFromDate(entry.date);
+    const nextWeek = weekStartFromDate(entryDraft.date);
     onChange((current) => ({
       ...current,
       actualEntries: current.actualEntries.map((candidate) => candidate.id === entry.id ? {
         ...candidate,
+        date: entryDraft.date,
         startTime: entryDraft.startTime,
         endTime: entryDraft.endTime,
         testCaseCount: Math.max(0, Math.floor(entryDraft.testCaseCount)),
@@ -264,13 +271,15 @@ export function ActualsView({ state, onChange, orbitTasks, personName }: Trackin
           ...item,
           plannedHoursByWeek: {
             ...item.plannedHoursByWeek,
-            [weekStartFromDate(entry.date)]: Math.max(0, (item.plannedHoursByWeek[weekStartFromDate(entry.date)] ?? 0) - previousHours + hours),
+            [previousWeek]: Math.max(0, (item.plannedHoursByWeek[previousWeek] ?? 0) - previousHours + (previousWeek === nextWeek ? hours : 0)),
+            ...(previousWeek === nextWeek ? {} : { [nextWeek]: (item.plannedHoursByWeek[nextWeek] ?? 0) + hours }),
           },
         } : item)
         : current.workItems,
     }));
     setEditingEntryId(null);
-    setMessage("Actual hours, test cases, and bugs updated across all connected reports.");
+    setWeek(nextWeek);
+    setMessage("Actual date, hours, test cases, and bugs updated across all connected reports.");
   }
 
   const exportWeek = () => exportWorkTrackingWorkbooks({ state, weeks: [week], personName });
@@ -333,8 +342,8 @@ export function ActualsView({ state, onChange, orbitTasks, personName }: Trackin
         <div className="work-panel-heading"><div><p className="eyebrow">Detailed workweek</p><h2>Hours by task and weekday</h2></div><span>{formatWeekRange(week)}</span></div>
         <div className="work-table-scroll">
           <table className="work-table actuals-matrix">
-            <thead><tr><th rowSpan={2}>Task</th><th rowSpan={2}>Workstream</th>{dates.map((day, index) => <th key={day} colSpan={3} className="actual-day-group">{WEEKDAY_LABELS[index]}<small>{formatShortDate(day)}</small></th>)}<th rowSpan={2}>Total hours</th></tr><tr className="actual-metric-headings">{dates.flatMap((day) => [<th key={`${day}-hours`}>Hours</th>, <th key={`${day}-tests`}>Test cases</th>, <th key={`${day}-bugs`}>Bugs</th>])}</tr></thead>
-            <tbody>{rows.length ? rows.map((row) => <tr key={row.item.id}><td><strong>{workItemDisplayTitleForWeek(state, row.item, week)}</strong><small>{row.item.application || "No application"} · {row.item.phase || "No phase"}</small></td><td><span className={`workstream-pill ${isInnovationWorkItem(row.item) ? "innovation" : ""}`}>{row.item.workstream}</span></td>{row.daily.flatMap((metrics, index) => [<td key={`${dates[index]}-hours`}>{metrics.hours ? formatHours(metrics.hours) : "—"}</td>, <td key={`${dates[index]}-tests`}>{metrics.testCases || "—"}</td>, <td key={`${dates[index]}-bugs`}>{metrics.bugs || "—"}</td>])}<td><strong>{formatHours(row.total)}h</strong></td></tr>) : <tr><td colSpan={3 + (dates.length * 3)} className="work-empty">No Actuals recorded for this workweek.</td></tr>}</tbody>
+            <thead><tr><th rowSpan={2}>Task type</th><th rowSpan={2}>Workstream</th><th rowSpan={2}>Subcategory</th><th rowSpan={2}>Task</th>{dates.map((day, index) => <th key={day} colSpan={3} className="actual-day-group">{WEEKDAY_LABELS[index]}<small>{formatShortDate(day)}</small></th>)}<th rowSpan={2}>Total hours</th></tr><tr className="actual-metric-headings">{dates.flatMap((day) => [<th key={`${day}-hours`}>Hours</th>, <th key={`${day}-tests`}>Test cases</th>, <th key={`${day}-bugs`}>Bugs</th>])}</tr></thead>
+            <tbody>{rows.length ? rows.map((row) => <tr key={row.item.id}><td>{row.item.taskType}</td><td><span className={`workstream-pill ${isInnovationWorkItem(row.item) ? "innovation" : ""}`}>{row.item.workstream}</span></td><td>{row.item.phase || "—"}</td><td><strong>{workItemDisplayTitleForWeek(state, row.item, week)}</strong><small>{row.item.application || "No application"}</small></td>{row.daily.flatMap((metrics, index) => [<td key={`${dates[index]}-hours`}>{metrics.hours ? formatHours(metrics.hours) : "—"}</td>, <td key={`${dates[index]}-tests`}>{metrics.testCases || "—"}</td>, <td key={`${dates[index]}-bugs`}>{metrics.bugs || "—"}</td>])}<td><strong>{formatHours(row.total)}h</strong></td></tr>) : <tr><td colSpan={5 + (dates.length * 3)} className="work-empty">No Actuals recorded for this workweek.</td></tr>}</tbody>
           </table>
         </div>
       </div>
@@ -344,7 +353,7 @@ export function ActualsView({ state, onChange, orbitTasks, personName }: Trackin
         <div className="actual-entry-list">{weekEntries.length ? weekEntries.map((entry) => {
           const item = state.workItems.find((candidate) => candidate.id === entry.workItemId);
           const isEditing = editingEntryId === entry.id;
-          return <article key={entry.id} className={isEditing ? "editing" : ""}><div><strong>{item?.title ?? "Unknown task"}{entry.holidayName ? ` — ${entry.holidayName}` : ""}{entry.entrySource === "scheduled-advance" && <em className="advance-entry-badge">Scheduled in advance</em>}{entry.entrySource === "timesheet-source" && <em className="advance-entry-badge utilized">Entered from Timesheet</em>}</strong>{isEditing ? <div className="actual-entry-edit-grid"><label>Start time<input type="time" value={entryDraft.startTime} onChange={(event) => setEntryDraft({ ...entryDraft, startTime: event.target.value })} /></label><label>End time<input type="time" value={entryDraft.endTime} onChange={(event) => setEntryDraft({ ...entryDraft, endTime: event.target.value })} /></label><label>Actual hours<input type="number" min="0.25" max="23.75" step="0.25" value={formatHours(hoursBetween(entryDraft.startTime, entryDraft.endTime))} onChange={(event) => setEntryDraft({ ...entryDraft, endTime: endTimeForHours(entryDraft.startTime, Number(event.target.value)) })} /></label><label>Test cases<input type="number" min="0" step="1" value={entryDraft.testCaseCount} onChange={(event) => setEntryDraft({ ...entryDraft, testCaseCount: Math.max(0, Number(event.target.value)) })} /></label><label>Bugs<input type="number" min="0" step="1" value={entryDraft.bugCount} onChange={(event) => setEntryDraft({ ...entryDraft, bugCount: Math.max(0, Number(event.target.value)) })} /></label></div> : <span>{entry.date} · {entry.startTime}–{entry.endTime} · {formatHours(hoursBetween(entry.startTime, entry.endTime))}h · {entry.testCaseCount} test cases · {entry.bugCount} bugs</span>}<p>{entry.details || item?.notes || "No additional details"}</p></div><div className="actual-entry-actions">{isEditing ? <><button type="button" onClick={() => setEditingEntryId(null)} aria-label="Cancel editing"><X size={16} /></button><button className="save" type="button" onClick={() => saveEntryEdit(entry)}>Save</button></> : <button type="button" onClick={() => beginEntryEdit(entry)} aria-label={`Edit ${entry.holidayName || item?.title || "entry"}`}><Pencil size={16} /></button>}<button type="button" onClick={() => removeEntry(entry.id)} aria-label={`Delete ${entry.holidayName || item?.title || "entry"}`}><Trash2 size={16} /></button></div></article>;
+          return <article key={entry.id} className={isEditing ? "editing" : ""}><div><strong>{item?.title ?? "Unknown task"}{entry.holidayName ? ` — ${entry.holidayName}` : ""}{entry.entrySource === "scheduled-advance" && <em className="advance-entry-badge">Scheduled in advance</em>}{entry.entrySource === "timesheet-source" && <em className="advance-entry-badge utilized">Entered from Timesheet</em>}</strong>{isEditing ? <div className="actual-entry-edit-grid"><label>Date<input type="date" max={PLANNING_MAX_DATE} value={entryDraft.date} onChange={(event) => setEntryDraft({ ...entryDraft, date: event.target.value })} /></label><label>Start time<input type="time" value={entryDraft.startTime} onChange={(event) => setEntryDraft({ ...entryDraft, startTime: event.target.value })} /></label><label>End time<input type="time" value={entryDraft.endTime} onChange={(event) => setEntryDraft({ ...entryDraft, endTime: event.target.value })} /></label><label>Actual hours<input type="number" min="0.25" max="23.75" step="0.25" value={formatHours(hoursBetween(entryDraft.startTime, entryDraft.endTime))} onChange={(event) => setEntryDraft({ ...entryDraft, endTime: endTimeForHours(entryDraft.startTime, Number(event.target.value)) })} /></label><label>Test cases<input type="number" min="0" step="1" value={entryDraft.testCaseCount} onChange={(event) => setEntryDraft({ ...entryDraft, testCaseCount: Math.max(0, Number(event.target.value)) })} /></label><label>Bugs<input type="number" min="0" step="1" value={entryDraft.bugCount} onChange={(event) => setEntryDraft({ ...entryDraft, bugCount: Math.max(0, Number(event.target.value)) })} /></label></div> : <span>{entry.date} · {entry.startTime}–{entry.endTime} · {formatHours(hoursBetween(entry.startTime, entry.endTime))}h · {entry.testCaseCount} test cases · {entry.bugCount} bugs</span>}<p>{entry.details || item?.notes || "No additional details"}</p></div><div className="actual-entry-actions">{isEditing ? <><button type="button" onClick={() => setEditingEntryId(null)} aria-label="Cancel editing"><X size={16} /></button><button className="save" type="button" onClick={() => saveEntryEdit(entry)}>Save</button></> : <button type="button" onClick={() => beginEntryEdit(entry)} aria-label={`Edit ${entry.holidayName || item?.title || "entry"}`}><Pencil size={16} /></button>}<button type="button" onClick={() => removeEntry(entry.id)} aria-label={`Delete ${entry.holidayName || item?.title || "entry"}`}><Trash2 size={16} /></button></div></article>;
         }) : <p className="work-empty">Add your first entry above.</p>}</div>
       </div>
     </div>
@@ -1012,7 +1021,7 @@ export function TimesheetReportView({ state, onChange, personName }: TrackingVie
         <div className="work-table-scroll">
           <table className="work-table timesheet-table">
             <thead><tr><th>Task type</th><th>Task</th><th>Subcategory</th>{dates.map((day, index) => <th key={day}>{WEEKDAY_LABELS[index]}<small>{formatShortDate(day)}</small></th>)}<th>Total</th></tr><tr className="day-total-row"><th colSpan={3}>Included day totals</th>{dayTotals.map((total, index) => <th key={dates[index]}>{formatHours(total)}</th>)}<th>{formatHours(reportTotal)}</th></tr></thead>
-            <tbody>{rows.length ? rows.map((row) => <tr key={row.workItem.id} className={row.excluded ? "innovation-row" : ""}><td><span>{row.workItem.taskType}</span>{row.excluded && <small className="innovation-note">Excluded</small>}</td><td><strong>[{row.workItem.workstream}] {workItemDisplayTitleForWeek(state, row.workItem, week)}</strong><small>{row.workItem.application || "No application"}</small>{!row.excluded && dates.some((date) => timesheetOverrideKey(week, row.workItem.id, date) in state.timesheetOverrides) && <button className="reset-row-overrides" type="button" onClick={() => resetTimesheetOverride(row.workItem.id)}>Reset row to Actuals</button>}</td><td>{row.workItem.phase || "—"}</td>{row.hours.map((hours, index) => {
+            <tbody>{rows.length ? rows.map((row) => <tr key={row.workItem.id} className={row.excluded ? "innovation-row" : ""}><td><span>{row.workItem.taskType}</span>{row.excluded && <small className="innovation-note">Excluded</small>}</td><td><strong>{row.workItem.workstream}</strong><small>Actuals task: {workItemDisplayTitleForWeek(state, row.workItem, week)}{row.workItem.application ? ` · ${row.workItem.application}` : ""}</small>{!row.excluded && dates.some((date) => timesheetOverrideKey(week, row.workItem.id, date) in state.timesheetOverrides) && <button className="reset-row-overrides" type="button" onClick={() => resetTimesheetOverride(row.workItem.id)}>Reset row to Actuals</button>}</td><td>{row.workItem.phase || "—"}</td>{row.hours.map((hours, index) => {
               const overrideKey = timesheetOverrideKey(week, row.workItem.id, dates[index]);
               const overridden = overrideKey in state.timesheetOverrides;
               return <td key={dates[index]}>{row.excluded ? (hours ? formatHours(hours) : "—") : <div className={`timesheet-edit-cell ${overridden ? "overridden" : ""}`}><input key={`${overrideKey}-${hours}`} type="number" min="0" max="24" step="0.25" defaultValue={formatHours(hours)} aria-label={`${row.workItem.title} hours for ${dates[index]}`} onBlur={(event) => setTimesheetOverride(row.workItem.id, dates[index], event.target.value)} />{overridden && <button type="button" onClick={() => resetTimesheetOverride(row.workItem.id, dates[index])} aria-label={`Reset ${row.workItem.title} for ${dates[index]}`} title="Reset to Actuals-derived value">↺</button>}</div>}</td>;

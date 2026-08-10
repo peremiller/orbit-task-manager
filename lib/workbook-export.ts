@@ -239,7 +239,7 @@ function addTimesheetSheet(workbook: import("exceljs").Workbook, state: WorkTrac
   const eligibleFormula = `SUMIFS('Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow},'Actuals'!$J$${actualRows.firstDataRow}:$J$${actualRows.lastDataRow},"<>Innovation",'Actuals'!$H$${actualRows.firstDataRow}:$H$${actualRows.lastDataRow},"<>Innovation")`;
   formula(sheet.getCell("B4"), eligibleFormula, eligibleActual);
   sheet.getCell("C4").value = "Innovation is excluded from the 45-hour total";
-  const headers: (string | Date)[] = ["Task type", "Task", "Workstream", "Application", "Subcategory / phase", ...dates.map(dateValue), "Total", "Scope"];
+  const headers: (string | Date)[] = ["Task type", "Task", "Actuals task", "Application", "Subcategory / phase", ...dates.map(dateValue), "Total", "Scope"];
   sheet.addRow(headers);
   dates.forEach((_, index) => { sheet.getRow(5).getCell(6 + index).numFmt = "ddd\nmmm d"; });
   styleHeader(sheet.getRow(5));
@@ -254,10 +254,10 @@ function addTimesheetSheet(workbook: import("exceljs").Workbook, state: WorkTrac
   const adjustmentDay = adjustmentItem ? rowWithRawHours(adjustmentItem).findLastIndex((value) => value > 0) : -1;
   rows.forEach((reportRow) => {
     const resultRow = generatedRows.find((candidate) => candidate.workItem.id === reportRow.workItem.id)!;
-    const row = sheet.addRow([reportRow.workItem.taskType, workItemDisplayTitleForWeek(state, reportRow.workItem, week), reportRow.workItem.workstream, reportRow.workItem.application, reportRow.workItem.phase, ...dates.map(() => null), null, reportRow.excluded ? "Excluded - Innovation" : "Included"]);
+    const row = sheet.addRow([reportRow.workItem.taskType, reportRow.workItem.workstream, workItemDisplayTitleForWeek(state, reportRow.workItem, week), reportRow.workItem.application, reportRow.workItem.phase, ...dates.map(() => null), null, reportRow.excluded ? "Excluded - Innovation" : "Included"]);
     dates.forEach((date, dayIndex) => {
       const column = 6 + dayIndex;
-      const raw = `SUMIFS('Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow},'Actuals'!$I$${actualRows.firstDataRow}:$I$${actualRows.lastDataRow},$B${row.number},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${columnLetter(column)}$5)`;
+      const raw = `SUMIFS('Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow},'Actuals'!$I$${actualRows.firstDataRow}:$I$${actualRows.lastDataRow},$C${row.number},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${columnLetter(column)}$5)`;
       const override = state.timesheetOverrides[timesheetOverrideKey(week, reportRow.workItem.id, date)];
       if (!reportRow.excluded && Number.isFinite(override)) {
         formula(row.getCell(column), `${override}`, resultRow.hours[dayIndex]);
@@ -431,7 +431,7 @@ function addGlossarySheet(workbook: import("exceljs").Workbook, week: string, pe
 
 function addUtilizationSheet(workbook: import("exceljs").Workbook, state: WorkTrackingState, week: string, personName: string, actualRows: { firstDataRow: number; lastDataRow: number }) {
   const sheet = workbook.addWorksheet("Utilization", { views: [{ state: "frozen", ySplit: 5 }] });
-  styleTitle(sheet, "Orbit Utilization", personName, week, 13);
+  styleTitle(sheet, "Orbit Utilization", personName, week, 17);
   sheet.getCell("A4").value = "Utilization rule";
   sheet.getCell("B4").value = "Test work in Planning or Execution phase counts as utilized; meetings do not count.";
   sheet.mergeCells("B4:H4");
@@ -453,10 +453,13 @@ function addUtilizationSheet(workbook: import("exceljs").Workbook, state: WorkTr
     if (utilized) row.eachCell({ includeEmpty: true }, (cell, column) => { if (column <= 8) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: PALE_GREEN } }; });
   });
   const lastDataRow = Math.max(firstDataRow, sheet.rowCount);
-  const summaryStart = lastDataRow + 3;
-  sheet.getCell(`A${summaryStart}`).value = "Utilization metric";
-  sheet.getCell(`B${summaryStart}`).value = "Formula result";
-  sheet.getCell(`C${summaryStart}`).value = "Definition";
+  const summaryStart = 11;
+  const summaryLabelColumn = "O";
+  const summaryResultColumn = "P";
+  const summaryDefinitionColumn = "Q";
+  sheet.getCell(`${summaryLabelColumn}${summaryStart}`).value = "Utilization metric";
+  sheet.getCell(`${summaryResultColumn}${summaryStart}`).value = "Formula result";
+  sheet.getCell(`${summaryDefinitionColumn}${summaryStart}`).value = "Definition";
   styleHeader(sheet.getRow(summaryStart), PURPLE);
   const actualTotal = actualHoursForWeek(state, week);
   const utilizedTotal = weekEntries.reduce((sum, entry) => {
@@ -471,16 +474,16 @@ function addUtilizationSheet(workbook: import("exceljs").Workbook, state: WorkTr
     ["Actual hours", `SUM(E${firstDataRow}:E${lastDataRow})`, actualTotal, "All Actuals for the workweek"],
     ["Utilized hours", `SUM(G${firstDataRow}:G${lastDataRow})`, utilizedTotal, "Test Planning and Test Execution"],
     ["Meeting hours", `SUM(H${firstDataRow}:H${lastDataRow})`, meetingTotal, "Meeting task types; excluded from utilization"],
-    ["Other non-utilized hours", `B${summaryStart + 1}-B${summaryStart + 2}-B${summaryStart + 3}`, Math.max(0, actualTotal - utilizedTotal - meetingTotal), "Actual hours not classified as utilized or meeting"],
-    ["Utilization vs 45h", `IFERROR(B${summaryStart + 2}/${REQUIRED_WEEKLY_HOURS},0)`, utilizedTotal / REQUIRED_WEEKLY_HOURS, "Utilized hours ÷ 45 required hours", "0.0%"],
-    ["Productive share of Actuals", `IFERROR(B${summaryStart + 2}/B${summaryStart + 1},0)`, actualTotal ? utilizedTotal / actualTotal : 0, "Utilized hours ÷ all Actual hours", "0.0%"],
+    ["Other non-utilized hours", `${summaryResultColumn}${summaryStart + 1}-${summaryResultColumn}${summaryStart + 2}-${summaryResultColumn}${summaryStart + 3}`, Math.max(0, actualTotal - utilizedTotal - meetingTotal), "Actual hours not classified as utilized or meeting"],
+    ["Utilization vs 45h", `IFERROR(${summaryResultColumn}${summaryStart + 2}/${REQUIRED_WEEKLY_HOURS},0)`, utilizedTotal / REQUIRED_WEEKLY_HOURS, "Utilized hours ÷ 45 required hours", "0.0%"],
+    ["Productive share of Actuals", `IFERROR(${summaryResultColumn}${summaryStart + 2}/${summaryResultColumn}${summaryStart + 1},0)`, actualTotal ? utilizedTotal / actualTotal : 0, "Utilized hours ÷ all Actual hours", "0.0%"],
   ];
   summaries.forEach(([label, expression, result, definition, numFmt], index) => {
     const row = summaryStart + 1 + index;
-    sheet.getCell(`A${row}`).value = label;
-    formula(sheet.getCell(`B${row}`), expression, result);
-    sheet.getCell(`C${row}`).value = definition;
-    if (numFmt) sheet.getCell(`B${row}`).numFmt = numFmt;
+    sheet.getCell(`${summaryLabelColumn}${row}`).value = label;
+    formula(sheet.getCell(`${summaryResultColumn}${row}`), expression, result);
+    sheet.getCell(`${summaryDefinitionColumn}${row}`).value = definition;
+    if (numFmt) sheet.getCell(`${summaryResultColumn}${row}`).numFmt = numFmt;
   });
 
   const dates = weekdayDates(week);
@@ -502,9 +505,9 @@ function addUtilizationSheet(workbook: import("exceljs").Workbook, state: WorkTr
   });
   styleData(sheet, firstDataRow, 5 + state.workItems.length, 1, 8);
   styleData(sheet, 6, 5 + dates.length, 10, 13);
-  styleData(sheet, summaryStart + 1, summaryStart + summaries.length, 1, 3);
+  styleData(sheet, summaryStart + 1, summaryStart + summaries.length, 15, 17);
   sheet.autoFilter = { from: { row: 5, column: 1 }, to: { row: 5, column: 8 } };
-  sheet.columns = [{ width: 34 }, { width: 26 }, { width: 24 }, { width: 20 }, { width: 14 }, { width: 24 }, { width: 15 }, { width: 14 }, { width: 3 }, { width: 18 }, { width: 15 }, { width: 16 }, { width: 17 }];
+  sheet.columns = [{ width: 34 }, { width: 26 }, { width: 24 }, { width: 20 }, { width: 14 }, { width: 24 }, { width: 15 }, { width: 14 }, { width: 3 }, { width: 18 }, { width: 15 }, { width: 16 }, { width: 17 }, { width: 3 }, { width: 26 }, { width: 18 }, { width: 42 }];
   return { sheet, summaryStart };
 }
 
