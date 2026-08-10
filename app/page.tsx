@@ -60,13 +60,15 @@ import {
 import { computeKarma, clampDailyGoal, KARMA_LEVELS, type KarmaStats } from "@/lib/karma";
 import { filterTasks } from "@/lib/task-filters";
 import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-recovery";
+import { createDefaultWorkTrackingState, normalizeWorkTracking, type WorkTrackingState } from "@/lib/work-tracking";
+import { ActualsView, EffortPlanView, SelectionManagerView, TimesheetReportView, WorkDashboardView } from "./work-tracking-views";
 
 type Priority = "Very High" | "High" | "Medium" | "Low";
 type TaskStatus = "todo" | "in-progress" | "done";
 type StatusFilter = "All" | TaskStatus;
 type Recurrence = "none" | "daily" | "weekdays" | "weekly" | "monthly";
 type Subtask = { id: number; title: string; completed: boolean };
-export type View = "today" | "inbox" | "upcoming" | "planner" | "board" | "filtersLabels" | "projects" | "analytics" | "timerHistory" | "completed";
+export type View = "today" | "inbox" | "upcoming" | "planner" | "board" | "filtersLabels" | "projects" | "analytics" | "timerHistory" | "completed" | "actuals" | "effortPlan" | "timesheetReport" | "workDashboard" | "selectionManager";
 
 type Task = {
   id: number;
@@ -119,6 +121,7 @@ type WorkspaceResponse = {
     schedule: ScheduleWindow;
     focusTimer: FocusTimerState;
     focusHistory: FocusHistoryEntry[];
+    workTracking: WorkTrackingState;
     revision: number;
     updatedAt: string;
   } | null;
@@ -159,6 +162,11 @@ const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: s
   analytics: { eyebrow: "Your momentum", title: "Insights", description: "See how focus compounds over time." },
   timerHistory: { eyebrow: "Your focused time", title: "Timer History", description: "Review every completed and stopped focus session." },
   completed: { eyebrow: "Progress worth noticing", title: "Completed", description: "A record of what you moved forward." },
+  actuals: { eyebrow: "Record once, report everywhere", title: "Actuals", description: "Capture time, test cases, and bugs by task and workday." },
+  effortPlan: { eyebrow: "Plan against the work", title: "Effort Plan", description: "Compare planned and actual effort across one or many workweeks." },
+  timesheetReport: { eyebrow: "Exactly 45 included hours", title: "Timesheet Report", description: "A weekly report derived from your Actuals and Effort Plan." },
+  workDashboard: { eyebrow: "See the connected picture", title: "Dashboard", description: "Compare capacity, utilization, quality activity, and reporting readiness across one or many workweeks." },
+  selectionManager: { eyebrow: "Configure once, use everywhere", title: "Selection Manager", description: "Manage the dropdown values used by Actuals and Effort Plan." },
 };
 
 const VIEW_PATHS: Record<View, string> = {
@@ -172,6 +180,11 @@ const VIEW_PATHS: Record<View, string> = {
   analytics: "/insights",
   timerHistory: "/timer-history",
   completed: "/completed",
+  actuals: "/actuals",
+  effortPlan: "/effort-plan",
+  timesheetReport: "/timesheet-report",
+  workDashboard: "/dashboard",
+  selectionManager: "/selection-manager",
 };
 
 const emptyDraft = {
@@ -424,7 +437,7 @@ function scheduleTimeLabels(schedule: ScheduleWindow) {
   });
 }
 
-function accountStorageKey(kind: "tasks" | "projects" | "schedule" | "focus-timer" | "focus-history", userId: string) {
+function accountStorageKey(kind: "tasks" | "projects" | "schedule" | "focus-timer" | "focus-history" | "work-tracking", userId: string) {
   return `orbit-${kind}-v1:${userId}`;
 }
 
@@ -432,11 +445,11 @@ function userInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "AJ";
 }
 
-async function saveWorkspace(tasks: Task[], projects: Project[], schedule: ScheduleWindow, focusTimer: FocusTimerState, focusHistory: FocusHistoryEntry[]) {
+async function saveWorkspace(tasks: Task[], projects: Project[], schedule: ScheduleWindow, focusTimer: FocusTimerState, focusHistory: FocusHistoryEntry[], workTracking: WorkTrackingState) {
   const response = await fetch("/api/workspace", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tasks, projects, schedule, focusTimer, focusHistory }),
+    body: JSON.stringify({ tasks, projects, schedule, focusTimer, focusHistory, workTracking }),
   });
   if (!response.ok) throw new Error("Workspace save failed");
   return response.json() as Promise<WorkspaceResponse>;
@@ -472,6 +485,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [focusTask, setFocusTask] = useState<Task | null>(INITIAL_TASKS[0]);
   const [focusTimer, setFocusTimer] = useState<FocusTimerState>({ ...DEFAULT_FOCUS_TIMER });
   const [focusHistory, setFocusHistory] = useState<FocusHistoryEntry[]>([]);
+  const [workTracking, setWorkTracking] = useState<WorkTrackingState>(() => createDefaultWorkTrackingState());
   const [clockNow, setClockNow] = useState(() => Date.now());
   const [toast, setToast] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -489,11 +503,11 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const syncWasOffline = useRef(false);
   const serverRevision = useRef(0);
   const completingSession = useRef<string | null>(null);
-  const latestWorkspace = useRef({ tasks, projects, schedule: todaySchedule, focusTimer, focusHistory });
+  const latestWorkspace = useRef({ tasks, projects, schedule: todaySchedule, focusTimer, focusHistory, workTracking });
 
   useEffect(() => {
-    latestWorkspace.current = { tasks, projects, schedule: todaySchedule, focusTimer, focusHistory };
-  }, [focusHistory, focusTimer, projects, tasks, todaySchedule]);
+    latestWorkspace.current = { tasks, projects, schedule: todaySchedule, focusTimer, focusHistory, workTracking };
+  }, [focusHistory, focusTimer, projects, tasks, todaySchedule, workTracking]);
 
   useEffect(() => {
     function updateLocalTime() {
@@ -539,11 +553,13 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       const scheduleKey = accountStorageKey("schedule", user.id);
       const focusTimerKey = accountStorageKey("focus-timer", user.id);
       const focusHistoryKey = accountStorageKey("focus-history", user.id);
+      const workTrackingKey = accountStorageKey("work-tracking", user.id);
       let cachedTasks: Task[] | null = null;
       let cachedProjects: Project[] | null = null;
       let cachedSchedule: ScheduleWindow | null = null;
       let cachedFocusTimer: FocusTimerState = { ...DEFAULT_FOCUS_TIMER };
       let cachedFocusHistory: FocusHistoryEntry[] = [];
+      let cachedWorkTracking = createDefaultWorkTrackingState();
       let legacyTasksBackup: Task[] = [];
       let legacyProjectsBackup: Project[] = [];
       let legacyRecoveryComplete = false;
@@ -560,7 +576,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         const storedSchedule = window.localStorage.getItem(scheduleKey);
         const storedFocusTimer = window.localStorage.getItem(focusTimerKey);
         const storedFocusHistory = window.localStorage.getItem(focusHistoryKey);
-        hasCachedWorkspace = Boolean(storedTasks || storedProjects || storedSchedule || storedFocusTimer || storedFocusHistory);
+        const storedWorkTracking = window.localStorage.getItem(workTrackingKey);
+        hasCachedWorkspace = Boolean(storedTasks || storedProjects || storedSchedule || storedFocusTimer || storedFocusHistory || storedWorkTracking);
         if (storedTasks) {
           const parsedTasks = JSON.parse(storedTasks);
           if (Array.isArray(parsedTasks)) cachedTasks = parsedTasks;
@@ -579,6 +596,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         }
         if (storedFocusTimer) cachedFocusTimer = normalizeFocusTimer(JSON.parse(storedFocusTimer));
         if (storedFocusHistory) cachedFocusHistory = normalizeFocusHistory(JSON.parse(storedFocusHistory));
+        if (storedWorkTracking) cachedWorkTracking = normalizeWorkTracking(JSON.parse(storedWorkTracking));
         if (legacyProjects) {
           const parsedLegacyProjects = JSON.parse(legacyProjects);
           if (Array.isArray(parsedLegacyProjects)) legacyProjectsBackup = parsedLegacyProjects;
@@ -596,6 +614,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       let nextSchedule = cachedSchedule ?? DEFAULT_TODAY_SCHEDULE;
       let nextFocusTimer = cachedFocusTimer;
       let nextFocusHistory = cachedFocusHistory;
+      let nextWorkTracking = cachedWorkTracking;
       let status: SyncStatus = "offline";
       let recoveredLegacyWorkspace = false;
       let migratedTenHourSchedule = false;
@@ -611,9 +630,10 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           nextSchedule = isScheduleWindow(workspace.schedule) ? workspace.schedule : DEFAULT_TODAY_SCHEDULE;
           nextFocusTimer = normalizeFocusTimer(workspace.focusTimer);
           nextFocusHistory = normalizeFocusHistory(workspace.focusHistory);
+          nextWorkTracking = normalizeWorkTracking(workspace.workTracking);
           serverRevision.current = workspace.revision;
         } else if (hasCachedWorkspace) {
-          const saved = await saveWorkspace(nextTasks, nextProjects, nextSchedule, nextFocusTimer, nextFocusHistory);
+          const saved = await saveWorkspace(nextTasks, nextProjects, nextSchedule, nextFocusTimer, nextFocusHistory, nextWorkTracking);
           serverRevision.current = saved.workspace?.revision ?? 0;
         }
 
@@ -631,7 +651,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           nextTasks = recoveredTasks;
           nextProjects = recoveredProjects;
           if (recoveredLegacyWorkspace) {
-            const saved = await saveWorkspace(nextTasks, nextProjects, nextSchedule, nextFocusTimer, nextFocusHistory);
+            const saved = await saveWorkspace(nextTasks, nextProjects, nextSchedule, nextFocusTimer, nextFocusHistory, nextWorkTracking);
             serverRevision.current = saved.workspace?.revision ?? serverRevision.current;
           }
           window.localStorage.setItem(recoveryKey, "complete");
@@ -647,12 +667,13 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       setTodaySchedule(nextSchedule);
       setFocusTimer(nextFocusTimer);
       setFocusHistory(nextFocusHistory);
+      setWorkTracking(nextWorkTracking);
       if (recoveredLegacyWorkspace) {
         setToast("Recovered your earlier local tasks and projects, including completion status.");
       }
       setFocusTask((current) => nextTasks.find((task) => task.id === nextFocusTimer.taskId && !task.completed) ?? nextTasks.find((task) => task.id === current?.id && !task.completed) ?? nextTasks.find((task) => !task.completed) ?? null);
       lastSyncedPayload.current = status === "synced" && !migratedTenHourSchedule
-        ? JSON.stringify({ tasks: nextTasks, projects: nextProjects, schedule: nextSchedule, focusTimer: nextFocusTimer, focusHistory: nextFocusHistory })
+        ? JSON.stringify({ tasks: nextTasks, projects: nextProjects, schedule: nextSchedule, focusTimer: nextFocusTimer, focusHistory: nextFocusHistory, workTracking: nextWorkTracking })
         : "";
       try {
         window.localStorage.setItem(taskKey, JSON.stringify(nextTasks));
@@ -660,6 +681,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         window.localStorage.setItem(scheduleKey, JSON.stringify(nextSchedule));
         window.localStorage.setItem(focusTimerKey, JSON.stringify(nextFocusTimer));
         window.localStorage.setItem(focusHistoryKey, JSON.stringify(nextFocusHistory));
+        window.localStorage.setItem(workTrackingKey, JSON.stringify(nextWorkTracking));
       } catch {
         // The server copy remains authoritative when browser storage is unavailable.
       }
@@ -675,13 +697,14 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
   useEffect(() => {
     if (!hydrated.current || !sessionUser) return;
-    const payload = JSON.stringify({ tasks, projects, schedule: todaySchedule, focusTimer, focusHistory });
+    const payload = JSON.stringify({ tasks, projects, schedule: todaySchedule, focusTimer, focusHistory, workTracking });
     try {
       window.localStorage.setItem(accountStorageKey("tasks", sessionUser.id), JSON.stringify(tasks));
       window.localStorage.setItem(accountStorageKey("projects", sessionUser.id), JSON.stringify(projects));
       window.localStorage.setItem(accountStorageKey("schedule", sessionUser.id), JSON.stringify(todaySchedule));
       window.localStorage.setItem(accountStorageKey("focus-timer", sessionUser.id), JSON.stringify(focusTimer));
       window.localStorage.setItem(accountStorageKey("focus-history", sessionUser.id), JSON.stringify(focusHistory));
+      window.localStorage.setItem(accountStorageKey("work-tracking", sessionUser.id), JSON.stringify(workTracking));
     } catch {
       // Continue with cloud sync even if the local cache is unavailable.
     }
@@ -715,7 +738,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [focusHistory, focusTimer, projects, sessionUser, syncRetry, tasks, todaySchedule]);
+  }, [focusHistory, focusTimer, projects, sessionUser, syncRetry, tasks, todaySchedule, workTracking]);
 
   useEffect(() => {
     if (!sessionUser) return;
@@ -778,11 +801,13 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     if (!sessionUser) return;
     const timerKey = accountStorageKey("focus-timer", sessionUser.id);
     const historyKey = accountStorageKey("focus-history", sessionUser.id);
+    const workTrackingKey = accountStorageKey("work-tracking", sessionUser.id);
     function receiveTimerFromAnotherTab(event: StorageEvent) {
       if (!event.newValue) return;
       try {
         if (event.key === timerKey) setFocusTimer(normalizeFocusTimer(JSON.parse(event.newValue)));
         if (event.key === historyKey) setFocusHistory(normalizeFocusHistory(JSON.parse(event.newValue)));
+        if (event.key === workTrackingKey) setWorkTracking(normalizeWorkTracking(JSON.parse(event.newValue)));
       } catch {
         // Ignore malformed storage events and keep the current timer.
       }
@@ -811,6 +836,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           schedule: isScheduleWindow(workspace.schedule) ? workspace.schedule : DEFAULT_TODAY_SCHEDULE,
           focusTimer: normalizeFocusTimer(workspace.focusTimer),
           focusHistory: normalizeFocusHistory(workspace.focusHistory),
+          workTracking: normalizeWorkTracking(workspace.workTracking),
         };
         serverRevision.current = workspace.revision;
         lastSyncedPayload.current = JSON.stringify(remote);
@@ -819,6 +845,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         setTodaySchedule(remote.schedule);
         setFocusTimer(remote.focusTimer);
         setFocusHistory(remote.focusHistory);
+        setWorkTracking(remote.workTracking);
         setFocusTask((current) => remote.tasks.find((task) => task.id === remote.focusTimer.taskId && !task.completed) ?? remote.tasks.find((task) => task.id === current?.id && !task.completed) ?? remote.tasks.find((task) => !task.completed) ?? null);
         setSyncStatus("synced");
       } catch {
@@ -933,7 +960,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     : activeView === "today"
       ? { ...VIEW_TITLES.today, eyebrow: localDateLabel, title: `${localGreeting}, ${sessionUser?.displayName.split(" ")[0] ?? "there"}` }
       : VIEW_TITLES[activeView];
-  const taskFiltersVisible = activeView !== "analytics" && activeView !== "timerHistory" && activeView !== "filtersLabels" && (activeView !== "projects" || Boolean(activeProject));
+  const isWorkTrackingView = activeView === "actuals" || activeView === "effortPlan" || activeView === "timesheetReport" || activeView === "workDashboard" || activeView === "selectionManager";
+  const taskFiltersVisible = !isWorkTrackingView && activeView !== "analytics" && activeView !== "timerHistory" && activeView !== "filtersLabels" && (activeView !== "projects" || Boolean(activeProject));
   const activeFilterCount = [search.trim(), priorityFilter !== "All", projectFilter !== "All", statusFilter !== "All", dueFilter !== "All", labelFilter !== "All"].filter(Boolean).length;
   const viewTaskCount = activeProject
     ? visibleTasks.filter((task) => task.project === activeProject.name).length
@@ -1267,6 +1295,11 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     { view: "inbox", label: "Inbox", icon: Inbox, count: openTasks.length },
     { view: "upcoming", label: "Upcoming", icon: CalendarDays },
     { view: "planner", label: "Planner", icon: Clock3 },
+    { view: "actuals", label: "Actuals", icon: Rows3 },
+    { view: "effortPlan", label: "Effort Plan", icon: CalendarDays },
+    { view: "timesheetReport", label: "Timesheet Report", icon: BarChart3 },
+    { view: "workDashboard", label: "Dashboard", icon: TrendingUp },
+    { view: "selectionManager", label: "Selection Manager", icon: Settings },
     { view: "board", label: "Board", icon: KanbanSquare },
     { view: "filtersLabels", label: "Filters & Labels", icon: ListFilter },
     { view: "analytics", label: "Insights", icon: BarChart3 },
@@ -1378,7 +1411,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             </div>
           </section>
 
-          {activeView !== "timerHistory" && (
+          {activeView !== "timerHistory" && !isWorkTrackingView && (
             <form className="quick-capture" onSubmit={addQuickTask}>
               <span className="quick-capture-icon"><Sparkles size={18} /></span>
               <div className="quick-capture-field">
@@ -1443,11 +1476,16 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} />)}
           {activeView === "analytics" && <AnalyticsView tasks={tasks} focusHistory={focusHistory} karma={karma} dailyGoal={dailyGoal} onGoalChange={updateDailyGoal} />}
           {activeView === "timerHistory" && <TimerHistoryView focusHistory={focusHistory} search={search} now={clockNow} />}
+          {activeView === "actuals" && <ActualsView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
+          {activeView === "effortPlan" && <EffortPlanView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
+          {activeView === "timesheetReport" && <TimesheetReportView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
+          {activeView === "workDashboard" && <WorkDashboardView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
+          {activeView === "selectionManager" && <SelectionManagerView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
         </div>
       </main>
 
       <div className="floating-controls">
-        <button className="mobile-add" onClick={openNewTask} aria-label="Add task"><Plus size={22} /></button>
+        {!isWorkTrackingView && <button className="mobile-add" onClick={openNewTask} aria-label="Add task"><Plus size={22} /></button>}
       </div>
 
       {taskModalOpen && (

@@ -15,6 +15,16 @@ A calm, modern task management experience for clear priorities, focused work, an
 - Focus timer and keyboard shortcuts
 - Responsive light and dark themes with saved preferences
 - Account-specific cloud sync with offline caching and cross-device updates
+- Interconnected Actuals, Effort Plan, Timesheet Report, and Dashboard pages
+- Weekly, fortnightly, sprint, monthly, quarterly, and custom multi-week reporting views
+- Configurable sprint names, start dates, and end dates in Selection Manager
+- Seven-day Actuals and editable Timesheet grids with test case and bug counts
+- Exactly-45-hour Timesheet normalization with Innovation excluded from the total
+- Utilization reporting for Test Planning and Test Execution work
+- Advance leave/holiday and utilized-work entry directly from Timesheet Report
+- Official 2026 Philippine regular and special non-working holidays seeded by default
+- Central Selection Manager for workstreams, task types, phases, applications, frequencies, and leave types
+- One formula-driven six-tab Excel workbook per selected week, with multi-week batch export
 
 ## Development
 

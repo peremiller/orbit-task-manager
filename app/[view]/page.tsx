@@ -12,6 +12,11 @@ const ROUTE_VIEWS: Record<string, View> = {
   insights: "analytics",
   "timer-history": "timerHistory",
   completed: "completed",
+  actuals: "actuals",
+  "effort-plan": "effortPlan",
+  "timesheet-report": "timesheetReport",
+  dashboard: "workDashboard",
+  "selection-manager": "selectionManager",
 };
 
 export function generateStaticParams() {

@@ -6,6 +6,7 @@ import {
   type FocusHistoryEntry,
   type FocusTimerState,
 } from "./focus-timer";
+import { normalizeWorkTracking, type WorkTrackingState } from "./work-tracking";
 
 export type ScheduleWindow = {
   startTime: string;
@@ -21,6 +22,7 @@ export type OrbitWorkspace = {
   schedule: ScheduleWindow;
   focusTimer: FocusTimerState;
   focusHistory: FocusHistoryEntry[];
+  workTracking: WorkTrackingState;
   revision: number;
   updatedAt: string;
 };
@@ -31,6 +33,7 @@ type WorkspaceRow = {
   schedule: unknown;
   focus_timer: unknown;
   focus_history: unknown;
+  work_tracking: unknown;
   revision: string | number;
   updated_at: Date | string;
 };
@@ -71,6 +74,11 @@ async function ensureWorkspaceColumns(sql: ReturnType<typeof database>) {
     ADD COLUMN IF NOT EXISTS focus_history jsonb NOT NULL
     DEFAULT '[]'::jsonb
   `;
+  await sql`
+    ALTER TABLE orbit_workspaces
+    ADD COLUMN IF NOT EXISTS work_tracking jsonb NOT NULL
+    DEFAULT '{"workItems":[],"actualEntries":[],"selectedEffortWeeks":[],"timesheetWeek":""}'::jsonb
+  `;
 }
 
 function toWorkspace(row: WorkspaceRow): OrbitWorkspace {
@@ -80,6 +88,7 @@ function toWorkspace(row: WorkspaceRow): OrbitWorkspace {
     schedule: normalizeScheduleWindow(row.schedule) ?? DEFAULT_TODAY_SCHEDULE,
     focusTimer: normalizeFocusTimer(row.focus_timer),
     focusHistory: normalizeFocusHistory(row.focus_history),
+    workTracking: normalizeWorkTracking(row.work_tracking),
     revision: Number(row.revision),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -89,7 +98,7 @@ export async function getOrbitWorkspace(userId: string): Promise<OrbitWorkspace 
   const sql = database();
   await ensureWorkspaceColumns(sql);
   const rows = await sql`
-    SELECT tasks, projects, schedule, focus_timer, focus_history, revision, updated_at
+    SELECT tasks, projects, schedule, focus_timer, focus_history, work_tracking, revision, updated_at
     FROM orbit_workspaces
     WHERE user_id = ${userId}
     LIMIT 1
@@ -104,12 +113,14 @@ export async function saveOrbitWorkspace(
   schedule?: ScheduleWindow,
   focusTimer?: FocusTimerState,
   focusHistory?: FocusHistoryEntry[],
+  workTracking?: WorkTrackingState,
 ): Promise<OrbitWorkspace> {
   const sql = database();
   await ensureWorkspaceColumns(sql);
   const scheduleJson = schedule ? JSON.stringify(schedule) : null;
   const focusTimerJson = focusTimer ? JSON.stringify(focusTimer) : null;
   const focusHistoryJson = focusHistory ? JSON.stringify(focusHistory) : null;
+  const workTrackingJson = workTracking ? JSON.stringify(workTracking) : null;
   try {
     await sql`
       CREATE TABLE IF NOT EXISTS orbit_workspace_history (
@@ -120,6 +131,7 @@ export async function saveOrbitWorkspace(
         schedule jsonb NOT NULL DEFAULT '{"startTime":"08:00","endTime":"18:00"}'::jsonb,
         focus_timer jsonb NOT NULL DEFAULT '{"status":"idle","sessionId":null,"taskId":null,"taskTitle":"","startedAt":null,"runStartedAt":null,"endsAt":null,"remainingSeconds":1500,"focusedSeconds":0,"targetSeconds":1500}'::jsonb,
         focus_history jsonb NOT NULL DEFAULT '[]'::jsonb,
+        work_tracking jsonb NOT NULL DEFAULT '{"workItems":[],"actualEntries":[],"selectedEffortWeeks":[],"timesheetWeek":""}'::jsonb,
         revision bigint NOT NULL,
         workspace_updated_at timestamptz NOT NULL,
         archived_at timestamptz NOT NULL DEFAULT now()
@@ -141,8 +153,13 @@ export async function saveOrbitWorkspace(
       DEFAULT '[]'::jsonb
     `;
     await sql`
-      INSERT INTO orbit_workspace_history (user_id, tasks, projects, schedule, focus_timer, focus_history, revision, workspace_updated_at)
-      SELECT user_id, tasks, projects, schedule, focus_timer, focus_history, revision, updated_at
+      ALTER TABLE orbit_workspace_history
+      ADD COLUMN IF NOT EXISTS work_tracking jsonb NOT NULL
+      DEFAULT '{"workItems":[],"actualEntries":[],"selectedEffortWeeks":[],"timesheetWeek":""}'::jsonb
+    `;
+    await sql`
+      INSERT INTO orbit_workspace_history (user_id, tasks, projects, schedule, focus_timer, focus_history, work_tracking, revision, workspace_updated_at)
+      SELECT user_id, tasks, projects, schedule, focus_timer, focus_history, work_tracking, revision, updated_at
       FROM orbit_workspaces
       WHERE user_id = ${userId}
     `;
@@ -150,14 +167,15 @@ export async function saveOrbitWorkspace(
     console.error("Failed to archive Orbit workspace revision", error);
   }
   const rows = await sql`
-    INSERT INTO orbit_workspaces (user_id, tasks, projects, schedule, focus_timer, focus_history)
+    INSERT INTO orbit_workspaces (user_id, tasks, projects, schedule, focus_timer, focus_history, work_tracking)
     VALUES (
       ${userId},
       ${JSON.stringify(tasks)}::jsonb,
       ${JSON.stringify(projects)}::jsonb,
       COALESCE(${scheduleJson}::jsonb, '{"startTime":"08:00","endTime":"18:00"}'::jsonb),
       COALESCE(${focusTimerJson}::jsonb, ${JSON.stringify(DEFAULT_FOCUS_TIMER)}::jsonb),
-      COALESCE(${focusHistoryJson}::jsonb, '[]'::jsonb)
+      COALESCE(${focusHistoryJson}::jsonb, '[]'::jsonb),
+      COALESCE(${workTrackingJson}::jsonb, '{"workItems":[],"actualEntries":[],"selectedEffortWeeks":[],"timesheetWeek":""}'::jsonb)
     )
     ON CONFLICT (user_id) DO UPDATE SET
       tasks = EXCLUDED.tasks,
@@ -165,9 +183,10 @@ export async function saveOrbitWorkspace(
       schedule = COALESCE(${scheduleJson}::jsonb, orbit_workspaces.schedule),
       focus_timer = COALESCE(${focusTimerJson}::jsonb, orbit_workspaces.focus_timer),
       focus_history = COALESCE(${focusHistoryJson}::jsonb, orbit_workspaces.focus_history),
+      work_tracking = COALESCE(${workTrackingJson}::jsonb, orbit_workspaces.work_tracking),
       revision = orbit_workspaces.revision + 1,
       updated_at = now()
-    RETURNING tasks, projects, schedule, focus_timer, focus_history, revision, updated_at
+    RETURNING tasks, projects, schedule, focus_timer, focus_history, work_tracking, revision, updated_at
   ` as WorkspaceRow[];
   if (!rows[0]) throw new Error("Workspace save did not return a row");
   return toWorkspace(rows[0]);

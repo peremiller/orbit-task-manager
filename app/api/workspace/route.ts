@@ -2,11 +2,15 @@ import { cookies } from "next/headers";
 import { getOrbitWorkspace, normalizeScheduleWindow, saveOrbitWorkspace, type ScheduleWindow } from "../../../lib/orbit-db";
 import { ORBIT_SESSION_COOKIE, verifyOrbitSession } from "../../../lib/orbit-auth";
 import { normalizeFocusHistory, normalizeFocusTimer, type FocusHistoryEntry, type FocusTimerState } from "../../../lib/focus-timer";
+import { normalizeWorkTracking, type WorkTrackingState } from "../../../lib/work-tracking";
 
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_TASKS = 2_000;
 const MAX_PROJECTS = 500;
 const MAX_FOCUS_HISTORY = 500;
+const MAX_WORK_ITEMS = 1_000;
+const MAX_ACTUAL_ENTRIES = 5_000;
+const MAX_SPRINTS = 200;
 
 async function authenticatedUser() {
   const cookieStore = await cookies();
@@ -39,7 +43,7 @@ export async function PUT(request: Request) {
       return Response.json({ error: "Workspace is too large" }, { status: 413 });
     }
 
-    const body = JSON.parse(rawBody) as { tasks?: unknown; projects?: unknown; schedule?: unknown; focusTimer?: unknown; focusHistory?: unknown };
+    const body = JSON.parse(rawBody) as { tasks?: unknown; projects?: unknown; schedule?: unknown; focusTimer?: unknown; focusHistory?: unknown; workTracking?: unknown };
     if (!Array.isArray(body.tasks) || !Array.isArray(body.projects)) {
       return Response.json({ error: "Tasks and projects must be arrays" }, { status: 400 });
     }
@@ -69,7 +73,19 @@ export async function PUT(request: Request) {
       }
     }
 
-    const workspace = await saveOrbitWorkspace(user.id, body.tasks, body.projects, schedule, focusTimer, focusHistory);
+    let workTracking: WorkTrackingState | undefined;
+    if (body.workTracking !== undefined) {
+      const candidate = body.workTracking as { workItems?: unknown; actualEntries?: unknown; sprints?: unknown };
+      if (!candidate || !Array.isArray(candidate.workItems) || !Array.isArray(candidate.actualEntries) || (candidate.sprints !== undefined && !Array.isArray(candidate.sprints))) {
+        return Response.json({ error: "Work tracking data is invalid" }, { status: 400 });
+      }
+      if (candidate.workItems.length > MAX_WORK_ITEMS || candidate.actualEntries.length > MAX_ACTUAL_ENTRIES || (Array.isArray(candidate.sprints) && candidate.sprints.length > MAX_SPRINTS)) {
+        return Response.json({ error: "Work tracking data has too many items" }, { status: 413 });
+      }
+      workTracking = normalizeWorkTracking(body.workTracking);
+    }
+
+    const workspace = await saveOrbitWorkspace(user.id, body.tasks, body.projects, schedule, focusTimer, focusHistory, workTracking);
     return Response.json({ workspace }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof SyntaxError) return Response.json({ error: "Invalid JSON" }, { status: 400 });
