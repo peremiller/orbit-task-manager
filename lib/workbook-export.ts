@@ -42,11 +42,6 @@ function dateValue(iso: string) {
   return new Date(year, month - 1, day, 12);
 }
 
-function timeValue(value: string) {
-  const [hours, minutes] = value.split(":").map(Number);
-  return ((hours * 60) + minutes) / 1_440;
-}
-
 function columnLetter(index: number) {
   let result = "";
   for (let value = index; value > 0; value = Math.floor((value - 1) / 26)) result = String.fromCharCode(65 + ((value - 1) % 26)) + result;
@@ -123,11 +118,11 @@ function rawHours(state: WorkTrackingState, itemId: string, date: string) {
 
 function addActualsSheet(workbook: import("exceljs").Workbook, state: WorkTrackingState, week: string, personName: string) {
   const sheet = workbook.addWorksheet("Actuals", { views: [{ state: "frozen", ySplit: 5 }] });
-  styleTitle(sheet, "Orbit Actuals", personName, week, 14);
+  styleTitle(sheet, "Orbit Actuals", personName, week, 12);
   sheet.getCell("A4").value = "Weekly rule";
   sheet.getCell("B4").value = "At least 45 hours (Monday–Sunday; weekend entries optional)";
   sheet.getCell("B4").fill = { type: "pattern", pattern: "solid", fgColor: { argb: PALE_AMBER } };
-  const headers = ["Date", "Day", "Start time", "End time", "Hours", "Test case count", "Bug count", "Task type", "Task", "Workstream", "Application", "Phase / subcategory", "Entry details", "Entry source"];
+  const headers = ["Date", "Day", "Hours", "Test case count", "Bug count", "Task type", "Task", "Workstream", "Application", "Phase / subcategory", "Entry details", "Entry source"];
   sheet.addRow(headers);
   styleHeader(sheet.getRow(5));
   const items = workItemMap(state);
@@ -137,9 +132,7 @@ function addActualsSheet(workbook: import("exceljs").Workbook, state: WorkTracki
     const row = sheet.addRow([
       dateValue(entry.date),
       new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(dateValue(entry.date)),
-      timeValue(entry.startTime),
-      timeValue(entry.endTime),
-      null,
+      hoursBetween(entry.startTime, entry.endTime),
       entry.testCaseCount,
       entry.bugCount,
       item?.taskType ?? "",
@@ -151,27 +144,23 @@ function addActualsSheet(workbook: import("exceljs").Workbook, state: WorkTracki
       entry.entrySource === "scheduled-advance" ? "Scheduled in advance" : entry.entrySource === "timesheet-source" ? "Entered from Timesheet" : "Actual entry",
     ]);
     row.getCell(1).numFmt = "yyyy-mm-dd";
-    row.getCell(3).numFmt = "h:mm AM/PM";
-    row.getCell(4).numFmt = "h:mm AM/PM";
-    const hours = hoursBetween(entry.startTime, entry.endTime);
-    formula(row.getCell(5), `IF(OR(C${row.number}="",D${row.number}=""),0,MOD(D${row.number}-C${row.number},1)*24)`, hours);
-    row.getCell(5).numFmt = "0.00";
+    row.getCell(3).numFmt = "0.00";
   });
   const firstDataRow = 6;
   const lastDataRow = Math.max(firstDataRow, 5 + entries.length);
   const totalRow = lastDataRow + 2;
-  sheet.getCell(`D${totalRow}`).value = "Weekly totals";
-  sheet.getCell(`D${totalRow}`).font = { bold: true };
-  formula(sheet.getCell(`E${totalRow}`), `SUM(E${firstDataRow}:E${lastDataRow})`, actualHoursForWeek(state, week));
-  formula(sheet.getCell(`F${totalRow}`), `SUM(F${firstDataRow}:F${lastDataRow})`, entries.reduce((sum, entry) => sum + entry.testCaseCount, 0));
-  formula(sheet.getCell(`G${totalRow}`), `SUM(G${firstDataRow}:G${lastDataRow})`, entries.reduce((sum, entry) => sum + entry.bugCount, 0));
-  [sheet.getCell(`D${totalRow}`), sheet.getCell(`E${totalRow}`), sheet.getCell(`F${totalRow}`), sheet.getCell(`G${totalRow}`)].forEach((cell) => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: PALE_BLUE } }; cell.border = thinBorder(); });
-  formula(sheet.getCell(`E${totalRow + 1}`), `IF(E${totalRow}>=${REQUIRED_WEEKLY_HOURS},"Complete","Needs "&TEXT(${REQUIRED_WEEKLY_HOURS}-E${totalRow},"0.00")&"h")`, actualHoursForWeek(state, week) >= 45 ? "Complete" : `Needs ${(45 - actualHoursForWeek(state, week)).toFixed(2)}h`);
-  sheet.getCell(`D${totalRow + 1}`).value = "45-hour check";
-  sheet.getCell(`E${totalRow + 1}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: actualHoursForWeek(state, week) >= 45 ? PALE_GREEN : PALE_AMBER } };
-  styleData(sheet, firstDataRow, 5 + entries.length, 1, 14);
-  sheet.autoFilter = { from: { row: 5, column: 1 }, to: { row: 5, column: 14 } };
-  sheet.columns = [{ width: 13 }, { width: 10 }, { width: 12 }, { width: 12 }, { width: 10 }, { width: 15 }, { width: 12 }, { width: 18 }, { width: 30 }, { width: 26 }, { width: 22 }, { width: 20 }, { width: 42 }, { width: 22 }];
+  sheet.getCell(`B${totalRow}`).value = "Weekly totals";
+  sheet.getCell(`B${totalRow}`).font = { bold: true };
+  formula(sheet.getCell(`C${totalRow}`), `SUM(C${firstDataRow}:C${lastDataRow})`, actualHoursForWeek(state, week));
+  formula(sheet.getCell(`D${totalRow}`), `SUM(D${firstDataRow}:D${lastDataRow})`, entries.reduce((sum, entry) => sum + entry.testCaseCount, 0));
+  formula(sheet.getCell(`E${totalRow}`), `SUM(E${firstDataRow}:E${lastDataRow})`, entries.reduce((sum, entry) => sum + entry.bugCount, 0));
+  [sheet.getCell(`B${totalRow}`), sheet.getCell(`C${totalRow}`), sheet.getCell(`D${totalRow}`), sheet.getCell(`E${totalRow}`)].forEach((cell) => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: PALE_BLUE } }; cell.border = thinBorder(); });
+  formula(sheet.getCell(`C${totalRow + 1}`), `IF(C${totalRow}>=${REQUIRED_WEEKLY_HOURS},"Complete","Needs "&TEXT(${REQUIRED_WEEKLY_HOURS}-C${totalRow},"0.00")&"h")`, actualHoursForWeek(state, week) >= 45 ? "Complete" : `Needs ${(45 - actualHoursForWeek(state, week)).toFixed(2)}h`);
+  sheet.getCell(`B${totalRow + 1}`).value = "45-hour check";
+  sheet.getCell(`C${totalRow + 1}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: actualHoursForWeek(state, week) >= 45 ? PALE_GREEN : PALE_AMBER } };
+  styleData(sheet, firstDataRow, 5 + entries.length, 1, 12);
+  sheet.autoFilter = { from: { row: 5, column: 1 }, to: { row: 5, column: 12 } };
+  sheet.columns = [{ width: 13 }, { width: 10 }, { width: 10 }, { width: 15 }, { width: 12 }, { width: 18 }, { width: 30 }, { width: 26 }, { width: 22 }, { width: 20 }, { width: 42 }, { width: 22 }];
   return { sheet, firstDataRow, lastDataRow, totalRow, entryCount: entries.length };
 }
 
@@ -194,7 +183,7 @@ function addEffortPlanSheet(workbook: import("exceljs").Workbook, state: WorkTra
     row.getCell(2).numFmt = "yyyy-mm-dd";
     const period = week === anchorWeek ? "Past / selected week" : "Forecast";
     formula(row.getCell(3), `IF(A${row.number}=$B$3,"Past / selected week",IF(A${row.number}>$B$3,"Forecast","Past"))`, period);
-    const actualFormula = `SUMIFS('Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow},'Actuals'!$I$${actualRows.firstDataRow}:$I$${actualRows.lastDataRow},H${row.number},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},">="&A${row.number},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},"<="&B${row.number})`;
+    const actualFormula = `SUMIFS('Actuals'!$C$${actualRows.firstDataRow}:$C$${actualRows.lastDataRow},'Actuals'!$G$${actualRows.firstDataRow}:$G$${actualRows.lastDataRow},H${row.number},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},">="&A${row.number},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},"<="&B${row.number})`;
     formula(row.getCell(10), actualFormula, actual);
     formula(row.getCell(11), `J${row.number}-I${row.number}`, actual - planned);
     formula(row.getCell(14), `IF(OR(D${row.number}="Innovation",G${row.number}="Innovation"),"Excluded - Innovation","Included")`, isInnovationWorkItem(item) ? "Excluded - Innovation" : "Included");
@@ -236,7 +225,7 @@ function addTimesheetSheet(workbook: import("exceljs").Workbook, state: WorkTrac
   styleTitle(sheet, "Orbit Timesheet Report", personName, week, scopeColumn);
   const eligibleActual = eligibleActualHoursForWeek(state, week);
   sheet.getCell("A4").value = "Eligible actual hours";
-  const eligibleFormula = `SUMIFS('Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow},'Actuals'!$J$${actualRows.firstDataRow}:$J$${actualRows.lastDataRow},"<>Innovation",'Actuals'!$H$${actualRows.firstDataRow}:$H$${actualRows.lastDataRow},"<>Innovation")`;
+  const eligibleFormula = `SUMIFS('Actuals'!$C$${actualRows.firstDataRow}:$C$${actualRows.lastDataRow},'Actuals'!$H$${actualRows.firstDataRow}:$H$${actualRows.lastDataRow},"<>Innovation",'Actuals'!$F$${actualRows.firstDataRow}:$F$${actualRows.lastDataRow},"<>Innovation")`;
   formula(sheet.getCell("B4"), eligibleFormula, eligibleActual);
   sheet.getCell("C4").value = "Innovation is excluded from the 45-hour total";
   const headers: (string | Date)[] = ["Task type", "Task", "Actuals task", "Application", "Subcategory / phase", ...dates.map(dateValue), "Total", "Scope"];
@@ -259,7 +248,7 @@ function addTimesheetSheet(workbook: import("exceljs").Workbook, state: WorkTrac
     const row = sheet.addRow([reportRow.workItem.taskType, reportRow.workItem.workstream, actualTaskNames, applications, reportRow.workItem.phase, ...dates.map(() => null), null, reportRow.excluded ? "Excluded - Innovation" : "Included"]);
     dates.forEach((date, dayIndex) => {
       const column = 6 + dayIndex;
-      const raw = `SUMIFS('Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow},'Actuals'!$H$${actualRows.firstDataRow}:$H$${actualRows.lastDataRow},$A${row.number},'Actuals'!$J$${actualRows.firstDataRow}:$J$${actualRows.lastDataRow},$B${row.number},'Actuals'!$L$${actualRows.firstDataRow}:$L$${actualRows.lastDataRow},$E${row.number},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${columnLetter(column)}$5)`;
+      const raw = `SUMIFS('Actuals'!$C$${actualRows.firstDataRow}:$C$${actualRows.lastDataRow},'Actuals'!$F$${actualRows.firstDataRow}:$F$${actualRows.lastDataRow},$A${row.number},'Actuals'!$H$${actualRows.firstDataRow}:$H$${actualRows.lastDataRow},$B${row.number},'Actuals'!$J$${actualRows.firstDataRow}:$J$${actualRows.lastDataRow},$E${row.number},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${columnLetter(column)}$5)`;
       const override = state.timesheetOverrides[timesheetOverrideKey(week, reportRow.id, date)];
       const hasLegacyOverride = reportRow.workItems.some((item) => Number.isFinite(state.timesheetOverrides[timesheetOverrideKey(week, item.id, date)]));
       if (!reportRow.excluded && Number.isFinite(override)) {
@@ -319,14 +308,14 @@ function addDashboardSheet(workbook: import("exceljs").Workbook, state: WorkTrac
   }, 0);
   const utilizationSummaryStart = Math.max(6, 5 + state.workItems.length) + 3;
   const metrics: [string, string, string | number, string][] = [
-    ["Actual hours", `'Actuals'!E${actualRows.totalRow}`, actualTotal, "At least 45 hours"],
+    ["Actual hours", `'Actuals'!C${actualRows.totalRow}`, actualTotal, "At least 45 hours"],
     ["Eligible actual hours", "'Timesheet Report'!B4", eligibleActual, "Innovation excluded"],
     ["Planned hours", `SUMIFS('Effort Plan'!$I$${effortRows.firstDataRow}:$I$${effortRows.lastDataRow},'Effort Plan'!$A$${effortRows.firstDataRow}:$A$${effortRows.lastDataRow},$B$3)`, planned, "At least 45 hours"],
     ["Timesheet report hours", `'Timesheet Report'!${timesheetRows.totalColumnLetter}${timesheetRows.totalRow}`, timesheetRows.reportTotal, "Exactly 45 hours"],
     ["Innovation hours", "B6-B7", Math.max(0, actualTotal - eligibleActual), "Visible but excluded from Timesheet"],
-    ["Test cases worked on", `'Actuals'!F${actualRows.totalRow}`, tests, "Count from Actuals"],
-    ["Bugs worked on", `'Actuals'!G${actualRows.totalRow}`, bugs, "Count from Actuals"],
-    ["Distinct tasks", `IFERROR(SUMPRODUCT(('Actuals'!$I$${actualRows.firstDataRow}:$I$${actualRows.lastDataRow}<>"")/COUNTIF('Actuals'!$I$${actualRows.firstDataRow}:$I$${actualRows.lastDataRow},'Actuals'!$I$${actualRows.firstDataRow}:$I$${actualRows.lastDataRow}&"")),0)`, distinctTasks, "Unique task names"],
+    ["Test cases worked on", `'Actuals'!D${actualRows.totalRow}`, tests, "Count from Actuals"],
+    ["Bugs worked on", `'Actuals'!E${actualRows.totalRow}`, bugs, "Count from Actuals"],
+    ["Distinct tasks", `IFERROR(SUMPRODUCT(('Actuals'!$G$${actualRows.firstDataRow}:$G$${actualRows.lastDataRow}<>"")/COUNTIF('Actuals'!$G$${actualRows.firstDataRow}:$G$${actualRows.lastDataRow},'Actuals'!$G$${actualRows.firstDataRow}:$G$${actualRows.lastDataRow}&"")),0)`, distinctTasks, "Unique task names"],
     ["Utilized hours", `'Utilization'!B${utilizationSummaryStart + 2}`, utilizedHours, "Test Planning and Test Execution"],
     ["Utilization vs 45h", `'Utilization'!B${utilizationSummaryStart + 5}`, utilizedHours / REQUIRED_WEEKLY_HOURS, "Utilized hours ÷ 45"],
   ];
@@ -353,9 +342,9 @@ function addDashboardSheet(workbook: import("exceljs").Workbook, state: WorkTrac
     const actual = entries.filter((entry) => entry.date === date).reduce((sum, entry) => sum + hoursBetween(entry.startTime, entry.endTime), 0);
     const dayTests = entries.filter((entry) => entry.date === date).reduce((sum, entry) => sum + entry.testCaseCount, 0);
     const dayBugs = entries.filter((entry) => entry.date === date).reduce((sum, entry) => sum + entry.bugCount, 0);
-    formula(sheet.getCell(`F${row}`), `SUMIF('Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${dateRef},'Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow})`, actual);
-    formula(sheet.getCell(`G${row}`), `SUMIF('Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${dateRef},'Actuals'!$F$${actualRows.firstDataRow}:$F$${actualRows.lastDataRow})`, dayTests);
-    formula(sheet.getCell(`H${row}`), `SUMIF('Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${dateRef},'Actuals'!$G$${actualRows.firstDataRow}:$G$${actualRows.lastDataRow})`, dayBugs);
+    formula(sheet.getCell(`F${row}`), `SUMIF('Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${dateRef},'Actuals'!$C$${actualRows.firstDataRow}:$C$${actualRows.lastDataRow})`, actual);
+    formula(sheet.getCell(`G${row}`), `SUMIF('Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${dateRef},'Actuals'!$D$${actualRows.firstDataRow}:$D$${actualRows.lastDataRow})`, dayTests);
+    formula(sheet.getCell(`H${row}`), `SUMIF('Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},${dateRef},'Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow})`, dayBugs);
   });
 
   const workstreamStart = 20;
@@ -372,10 +361,10 @@ function addDashboardSheet(workbook: import("exceljs").Workbook, state: WorkTrac
     const wsPlan = state.workItems.filter((item) => item.workstream === workstream).reduce((sum, item) => sum + (item.plannedHoursByWeek[week] ?? 0), 0);
     const wsTests = entries.filter((entry) => state.workItems.find((item) => item.id === entry.workItemId)?.workstream === workstream).reduce((sum, entry) => sum + entry.testCaseCount, 0);
     const wsBugs = entries.filter((entry) => state.workItems.find((item) => item.id === entry.workItemId)?.workstream === workstream).reduce((sum, entry) => sum + entry.bugCount, 0);
-    formula(sheet.getCell(`B${row}`), `SUMIF('Actuals'!$J$${actualRows.firstDataRow}:$J$${actualRows.lastDataRow},A${row},'Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow})`, wsActual);
+    formula(sheet.getCell(`B${row}`), `SUMIF('Actuals'!$H$${actualRows.firstDataRow}:$H$${actualRows.lastDataRow},A${row},'Actuals'!$C$${actualRows.firstDataRow}:$C$${actualRows.lastDataRow})`, wsActual);
     formula(sheet.getCell(`C${row}`), `SUMIFS('Effort Plan'!$I$${effortRows.firstDataRow}:$I$${effortRows.lastDataRow},'Effort Plan'!$D$${effortRows.firstDataRow}:$D$${effortRows.lastDataRow},A${row},'Effort Plan'!$A$${effortRows.firstDataRow}:$A$${effortRows.lastDataRow},$B$3)`, wsPlan);
-    formula(sheet.getCell(`D${row}`), `SUMIF('Actuals'!$J$${actualRows.firstDataRow}:$J$${actualRows.lastDataRow},A${row},'Actuals'!$F$${actualRows.firstDataRow}:$F$${actualRows.lastDataRow})`, wsTests);
-    formula(sheet.getCell(`E${row}`), `SUMIF('Actuals'!$J$${actualRows.firstDataRow}:$J$${actualRows.lastDataRow},A${row},'Actuals'!$G$${actualRows.firstDataRow}:$G$${actualRows.lastDataRow})`, wsBugs);
+    formula(sheet.getCell(`D${row}`), `SUMIF('Actuals'!$H$${actualRows.firstDataRow}:$H$${actualRows.lastDataRow},A${row},'Actuals'!$D$${actualRows.firstDataRow}:$D$${actualRows.lastDataRow})`, wsTests);
+    formula(sheet.getCell(`E${row}`), `SUMIF('Actuals'!$H$${actualRows.firstDataRow}:$H$${actualRows.lastDataRow},A${row},'Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow})`, wsBugs);
   });
   styleData(sheet, 6, 15, 1, 3);
   styleData(sheet, 6, 5 + dates.length, 5, 8);
@@ -392,7 +381,7 @@ function addGlossarySheet(workbook: import("exceljs").Workbook, week: string, pe
   sheet.addRow(["Term", "Definition", "Rule or mapping", "Workbook behavior"]);
   styleHeader(sheet.getRow(5), PURPLE);
   const entries = [
-    ["Actuals", "Recorded start and end time for a task on a specific date.", "At least 45 hours per Monday–Sunday workweek; weekend columns are optional placeholders.", "Feeds Actual hours in Effort Plan and Timesheet Report."],
+    ["Actuals", "Recorded hours for a task on a specific date.", "At least 45 hours per Monday–Sunday workweek; weekend columns are optional placeholders.", "Feeds Actual hours in Effort Plan and Timesheet Report."],
     ["Effort Plan", "Planned hours and task classification across selected weeks.", "At least 45 planned hours per selected workweek.", "Contains the exported actual week plus selected future forecast weeks."],
     ["Sprint / Every sprint view", "A named reporting period with user-managed start and end dates.", "Includes every Monday–Sunday workweek touched by the sprint; 45-hour rules remain weekly.", "Configured in Orbit Selection Manager and used to select the weeks included in multi-week exports."],
     ["Timesheet Report", "Weekly allocation of eligible Actuals by task and weekday.", "Included total must equal exactly 45 hours.", "Eligible Actuals above 45 are proportionally allocated; Innovation is excluded."],
@@ -408,7 +397,7 @@ function addGlossarySheet(workbook: import("exceljs").Workbook, week: string, pe
     ["Audit and Risk", "Audit and Risk portion of the former ARC workstream.", "Independent workstream.", "Included in Timesheet unless Task type is Innovation."],
     ["Corporate Communications", "Corporate Communications portion of the former ARC workstream.", "Independent workstream.", "Included in Timesheet unless Task type is Innovation."],
     ["Utilization", "Hours spent on Test work whose phase contains Planning or Execution.", "Utilized hours divided by the required 45-hour workweek; meetings do not count.", "Calculated by formula on the Utilization tab and linked to Dashboard & Analytics."],
-    ["Formula: Actual hours", "MOD(End time - Start time, 1) × 24 converts Excel time values to decimal hours.", "Blank start/end returns 0; an end time must be later than its start time in Orbit.", "Used in every Actuals Hours cell."],
+    ["Actual hours export", "Exports the calculated decimal hours stored by Orbit without exposing Start Time or End Time.", "Time entry and editing remain available in Orbit; the exported Actuals tab contains Hours only.", "Used in every Actuals Hours cell."],
     ["Formula: Actual totals", "SUM adds Hours, Test case count, and Bug count columns for the weekly totals.", "Counts are independent of hours.", "Used at the bottom of Actuals and linked into Dashboard & Analytics."],
     ["Formula: Effort actual rollup", "SUMIFS totals Actuals Hours where Task matches and Date falls between Week start and Week end.", "One Actuals tab contains the workbook's selected week.", "Populates Actual hours in Effort Plan."],
     ["Formula: Variance", "Actual hours minus Planned hours.", "Positive means effort exceeded plan; negative means plan exceeds recorded effort.", "Used in every Effort Plan Variance cell."],
@@ -451,7 +440,7 @@ function addUtilizationSheet(workbook: import("exceljs").Workbook, state: WorkTr
     const meeting = item.taskType.startsWith("Meeting");
     const classification = utilized ? "Utilized" : meeting ? "Non-utilized meeting" : "Non-utilized / review";
     const row = sheet.addRow([workItemDisplayTitleForWeek(state, item, week), item.workstream, item.phase, item.taskType, null, null, null, null]);
-    formula(row.getCell(5), `SUMIF('Actuals'!$I$${actualRows.firstDataRow}:$I$${actualRows.lastDataRow},A${row.number},'Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow})`, actual);
+    formula(row.getCell(5), `SUMIF('Actuals'!$G$${actualRows.firstDataRow}:$G$${actualRows.lastDataRow},A${row.number},'Actuals'!$C$${actualRows.firstDataRow}:$C$${actualRows.lastDataRow})`, actual);
     formula(row.getCell(6), `IF(AND(D${row.number}="Test",OR(ISNUMBER(SEARCH("Planning",C${row.number})),ISNUMBER(SEARCH("Execution",C${row.number})))),"Utilized",IF(ISNUMBER(SEARCH("Meeting",D${row.number})),"Non-utilized meeting","Non-utilized / review"))`, classification);
     formula(row.getCell(7), `IF(F${row.number}="Utilized",E${row.number},0)`, utilized ? actual : 0);
     formula(row.getCell(8), `IF(ISNUMBER(SEARCH("Meeting",D${row.number})),E${row.number},0)`, meeting ? actual : 0);
@@ -502,9 +491,9 @@ function addUtilizationSheet(workbook: import("exceljs").Workbook, state: WorkTr
       const item = state.workItems.find((candidate) => candidate.id === entry.workItemId);
       return sum + (item?.taskType === "Test" && /planning|execution/i.test(item.phase) ? hoursBetween(entry.startTime, entry.endTime) : 0);
     }, 0);
-    formula(sheet.getCell(`K${row}`), `SUMIF('Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},J${row},'Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow})`, actual);
-    const planning = `SUMIFS('Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},J${row},'Actuals'!$H$${actualRows.firstDataRow}:$H$${actualRows.lastDataRow},"Test",'Actuals'!$L$${actualRows.firstDataRow}:$L$${actualRows.lastDataRow},"*Planning*")`;
-    const execution = `SUMIFS('Actuals'!$E$${actualRows.firstDataRow}:$E$${actualRows.lastDataRow},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},J${row},'Actuals'!$H$${actualRows.firstDataRow}:$H$${actualRows.lastDataRow},"Test",'Actuals'!$L$${actualRows.firstDataRow}:$L$${actualRows.lastDataRow},"*Execution*")`;
+    formula(sheet.getCell(`K${row}`), `SUMIF('Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},J${row},'Actuals'!$C$${actualRows.firstDataRow}:$C$${actualRows.lastDataRow})`, actual);
+    const planning = `SUMIFS('Actuals'!$C$${actualRows.firstDataRow}:$C$${actualRows.lastDataRow},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},J${row},'Actuals'!$F$${actualRows.firstDataRow}:$F$${actualRows.lastDataRow},"Test",'Actuals'!$J$${actualRows.firstDataRow}:$J$${actualRows.lastDataRow},"*Planning*")`;
+    const execution = `SUMIFS('Actuals'!$C$${actualRows.firstDataRow}:$C$${actualRows.lastDataRow},'Actuals'!$A$${actualRows.firstDataRow}:$A$${actualRows.lastDataRow},J${row},'Actuals'!$F$${actualRows.firstDataRow}:$F$${actualRows.lastDataRow},"Test",'Actuals'!$J$${actualRows.firstDataRow}:$J$${actualRows.lastDataRow},"*Execution*")`;
     formula(sheet.getCell(`L${row}`), `${planning}+${execution}`, utilized);
     formula(sheet.getCell(`M${row}`), `IFERROR(L${row}/K${row},0)`, actual ? utilized / actual : 0);
     sheet.getCell(`M${row}`).numFmt = "0.0%";
