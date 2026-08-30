@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-const APP_ROUTES = ["/today", "/inbox", "/upcoming", "/planner", "/board", "/filters-labels", "/projects", "/insights", "/timer-history", "/completed"];
+const APP_ROUTES = ["/today", "/inbox", "/upcoming", "/planner", "/mind-map", "/goals", "/board", "/filters-labels", "/projects", "/insights", "/timer-history", "/completed"];
 
 export default function ServiceWorkerRegistration() {
   useEffect(() => {

@@ -5,6 +5,8 @@ A calm, modern task management experience for clear priorities, focused work, an
 ## Highlights
 
 - Today, Inbox, Upcoming, Board, Projects, Insights, and Completed views
+- Goals workspace with optional task-to-goal alignment, progress, target dates, and inline goal creation
+- Real-time Mind Map and weighted Word Map views of every open task, grouped by goal
 - Task creation, editing, deletion, search, filtering, and completion
 - Drag-and-drop workflow board
 - Todoist-style quick capture with dates, times, priorities, labels, estimates, recurrence, and project tokens

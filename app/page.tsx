@@ -21,6 +21,7 @@ import {
   Menu,
   Moon,
   MoreHorizontal,
+  Network,
   Pause,
   Pencil,
   Play,
@@ -61,14 +62,16 @@ import { computeKarma, clampDailyGoal, KARMA_LEVELS, type KarmaStats } from "@/l
 import { filterTasks } from "@/lib/task-filters";
 import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-recovery";
 import { createDefaultWorkTrackingState, normalizeWorkTracking, type WorkTrackingState } from "@/lib/work-tracking";
+import { GOAL_COLORS, normalizeGoals, uniqueGoalId, type Goal } from "@/lib/goals";
 import { ActualsView, EffortPlanView, SelectionManagerView, TimesheetReportView, WorkDashboardView } from "./work-tracking-views";
+import { GoalsView, MindMapView } from "./goal-views";
 
 type Priority = "Very High" | "High" | "Medium" | "Low";
 type TaskStatus = "todo" | "in-progress" | "done";
 type StatusFilter = "All" | TaskStatus;
 type Recurrence = "none" | "daily" | "weekdays" | "weekly" | "monthly";
 type Subtask = { id: number; title: string; completed: boolean };
-export type View = "today" | "inbox" | "upcoming" | "planner" | "board" | "filtersLabels" | "projects" | "analytics" | "timerHistory" | "completed" | "actuals" | "effortPlan" | "timesheetReport" | "workDashboard" | "selectionManager";
+export type View = "today" | "inbox" | "upcoming" | "planner" | "mindMap" | "goals" | "board" | "filtersLabels" | "projects" | "analytics" | "timerHistory" | "completed" | "actuals" | "effortPlan" | "timesheetReport" | "workDashboard" | "selectionManager";
 
 type Task = {
   id: number;
@@ -86,6 +89,7 @@ type Task = {
   recurrence?: Recurrence;
   createdAt?: string;
   completedAt?: string;
+  goalId?: string;
 };
 
 type Project = {
@@ -120,6 +124,7 @@ type WorkspaceResponse = {
   workspace: {
     tasks: Task[];
     projects: Project[];
+    goals: Goal[];
     schedule: ScheduleWindow;
     focusTimer: FocusTimerState;
     focusHistory: FocusHistoryEntry[];
@@ -158,6 +163,8 @@ const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: s
   inbox: { eyebrow: "Capture first, organize later", title: "Inbox", description: "Loose ends and new ideas, ready to be clarified." },
   upcoming: { eyebrow: "The week ahead", title: "Upcoming", description: "A calm view of what is coming and when." },
   planner: { eyebrow: "Capacity without chaos", title: "Planner", description: "Balance effort across your week before work becomes overload." },
+  mindMap: { eyebrow: "See the whole orbit", title: "Mind Map", description: "A live visual of every open task, branching from the goals it supports." },
+  goals: { eyebrow: "Outcomes before activity", title: "Goals", description: "Connect daily work to the outcomes you want to achieve." },
   board: { eyebrow: "Flow of work", title: "Board", description: "Move tasks from intention to done." },
   filtersLabels: { eyebrow: "Your command center", title: "Filters & labels", description: "Find the right work instantly with smart views and reusable labels." },
   projects: { eyebrow: "Work with a purpose", title: "Projects", description: "Every active outcome, in one clear place." },
@@ -176,6 +183,8 @@ const VIEW_PATHS: Record<View, string> = {
   inbox: "/inbox",
   upcoming: "/upcoming",
   planner: "/planner",
+  mindMap: "/mind-map",
+  goals: "/goals",
   board: "/board",
   filtersLabels: "/filters-labels",
   projects: "/projects",
@@ -200,6 +209,14 @@ const emptyDraft = {
   labels: [] as string[],
   subtasks: [] as Subtask[],
   recurrence: "none" as Recurrence,
+  goalId: "",
+};
+
+const emptyGoalDraft = {
+  title: "",
+  description: "",
+  color: GOAL_COLORS[0],
+  targetDate: "",
 };
 
 const emptyProjectDraft = {
@@ -439,7 +456,7 @@ function scheduleTimeLabels(schedule: ScheduleWindow) {
   });
 }
 
-function accountStorageKey(kind: "tasks" | "projects" | "schedule" | "focus-timer" | "focus-history" | "work-tracking", userId: string) {
+function accountStorageKey(kind: "tasks" | "projects" | "goals" | "schedule" | "focus-timer" | "focus-history" | "work-tracking", userId: string) {
   return `orbit-${kind}-v1:${userId}`;
 }
 
@@ -447,11 +464,11 @@ function userInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "AJ";
 }
 
-async function saveWorkspace(tasks: Task[], projects: Project[], schedule: ScheduleWindow, focusTimer: FocusTimerState, focusHistory: FocusHistoryEntry[], workTracking: WorkTrackingState) {
+async function saveWorkspace(tasks: Task[], projects: Project[], goals: Goal[], schedule: ScheduleWindow, focusTimer: FocusTimerState, focusHistory: FocusHistoryEntry[], workTracking: WorkTrackingState) {
   const response = await fetch("/api/workspace", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tasks, projects, schedule, focusTimer, focusHistory, workTracking }),
+    body: JSON.stringify({ tasks, projects, goals, schedule, focusTimer, focusHistory, workTracking }),
   });
   if (!response.ok) throw new Error("Workspace save failed");
   return response.json() as Promise<WorkspaceResponse>;
@@ -461,6 +478,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
   const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
+  const [goals, setGoals] = useState<Goal[]>([]);
   const [todaySchedule, setTodaySchedule] = useState<ScheduleWindow>(DEFAULT_TODAY_SCHEDULE);
   const [activeView, setActiveView] = useState<View>(initialView);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(initialProjectId);
@@ -480,6 +498,11 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
   const [projectNameDraft, setProjectNameDraft] = useState("");
+  const [goalModalOpen, setGoalModalOpen] = useState(false);
+  const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
+  const [goalDraft, setGoalDraft] = useState(emptyGoalDraft);
+  const [taskGoalCreatorOpen, setTaskGoalCreatorOpen] = useState(false);
+  const [taskGoalTitle, setTaskGoalTitle] = useState("");
   const [draft, setDraft] = useState(emptyDraft);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [focusPickerOpen, setFocusPickerOpen] = useState(false);
@@ -505,11 +528,11 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const syncWasOffline = useRef(false);
   const serverRevision = useRef(0);
   const completingSession = useRef<string | null>(null);
-  const latestWorkspace = useRef({ tasks, projects, schedule: todaySchedule, focusTimer, focusHistory, workTracking });
+  const latestWorkspace = useRef({ tasks, projects, goals, schedule: todaySchedule, focusTimer, focusHistory, workTracking });
 
   useEffect(() => {
-    latestWorkspace.current = { tasks, projects, schedule: todaySchedule, focusTimer, focusHistory, workTracking };
-  }, [focusHistory, focusTimer, projects, tasks, todaySchedule, workTracking]);
+    latestWorkspace.current = { tasks, projects, goals, schedule: todaySchedule, focusTimer, focusHistory, workTracking };
+  }, [focusHistory, focusTimer, goals, projects, tasks, todaySchedule, workTracking]);
 
   useEffect(() => {
     function updateLocalTime() {
@@ -552,12 +575,14 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     async function hydrateWorkspace() {
       const taskKey = accountStorageKey("tasks", user.id);
       const projectKey = accountStorageKey("projects", user.id);
+      const goalKey = accountStorageKey("goals", user.id);
       const scheduleKey = accountStorageKey("schedule", user.id);
       const focusTimerKey = accountStorageKey("focus-timer", user.id);
       const focusHistoryKey = accountStorageKey("focus-history", user.id);
       const workTrackingKey = accountStorageKey("work-tracking", user.id);
       let cachedTasks: Task[] | null = null;
       let cachedProjects: Project[] | null = null;
+      let cachedGoals: Goal[] | null = null;
       let cachedSchedule: ScheduleWindow | null = null;
       let cachedFocusTimer: FocusTimerState = { ...DEFAULT_FOCUS_TIMER };
       let cachedFocusHistory: FocusHistoryEntry[] = [];
@@ -575,11 +600,12 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         const legacyProjects = user.id === "aj-miller" ? window.localStorage.getItem("orbit-projects-v1") : null;
         const storedTasks = window.localStorage.getItem(taskKey) ?? legacyTasks;
         const storedProjects = window.localStorage.getItem(projectKey) ?? legacyProjects;
+        const storedGoals = window.localStorage.getItem(goalKey);
         const storedSchedule = window.localStorage.getItem(scheduleKey);
         const storedFocusTimer = window.localStorage.getItem(focusTimerKey);
         const storedFocusHistory = window.localStorage.getItem(focusHistoryKey);
         const storedWorkTracking = window.localStorage.getItem(workTrackingKey);
-        hasCachedWorkspace = Boolean(storedTasks || storedProjects || storedSchedule || storedFocusTimer || storedFocusHistory || storedWorkTracking);
+        hasCachedWorkspace = Boolean(storedTasks || storedProjects || storedGoals || storedSchedule || storedFocusTimer || storedFocusHistory || storedWorkTracking);
         if (storedTasks) {
           const parsedTasks = JSON.parse(storedTasks);
           if (Array.isArray(parsedTasks)) cachedTasks = parsedTasks;
@@ -592,6 +618,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           const parsedProjects = JSON.parse(storedProjects);
           if (Array.isArray(parsedProjects)) cachedProjects = parsedProjects;
         }
+        if (storedGoals) cachedGoals = normalizeGoals(JSON.parse(storedGoals));
         if (storedSchedule) {
           const parsedSchedule = JSON.parse(storedSchedule);
           if (isScheduleWindow(parsedSchedule)) cachedSchedule = parsedSchedule;
@@ -613,6 +640,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
       let nextTasks = cachedTasks ?? INITIAL_TASKS;
       let nextProjects = cachedProjects ?? INITIAL_PROJECTS;
+      let nextGoals = cachedGoals ?? [];
       let nextSchedule = cachedSchedule ?? DEFAULT_TODAY_SCHEDULE;
       let nextFocusTimer = cachedFocusTimer;
       let nextFocusHistory = cachedFocusHistory;
@@ -629,13 +657,14 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         if (workspace) {
           nextTasks = Array.isArray(workspace.tasks) ? workspace.tasks : INITIAL_TASKS;
           nextProjects = Array.isArray(workspace.projects) ? workspace.projects : INITIAL_PROJECTS;
+          nextGoals = normalizeGoals(workspace.goals);
           nextSchedule = isScheduleWindow(workspace.schedule) ? workspace.schedule : DEFAULT_TODAY_SCHEDULE;
           nextFocusTimer = normalizeFocusTimer(workspace.focusTimer);
           nextFocusHistory = normalizeFocusHistory(workspace.focusHistory);
           nextWorkTracking = normalizeWorkTracking(workspace.workTracking);
           serverRevision.current = workspace.revision;
         } else if (hasCachedWorkspace) {
-          const saved = await saveWorkspace(nextTasks, nextProjects, nextSchedule, nextFocusTimer, nextFocusHistory, nextWorkTracking);
+          const saved = await saveWorkspace(nextTasks, nextProjects, nextGoals, nextSchedule, nextFocusTimer, nextFocusHistory, nextWorkTracking);
           serverRevision.current = saved.workspace?.revision ?? 0;
         }
 
@@ -653,7 +682,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           nextTasks = recoveredTasks;
           nextProjects = recoveredProjects;
           if (recoveredLegacyWorkspace) {
-            const saved = await saveWorkspace(nextTasks, nextProjects, nextSchedule, nextFocusTimer, nextFocusHistory, nextWorkTracking);
+            const saved = await saveWorkspace(nextTasks, nextProjects, nextGoals, nextSchedule, nextFocusTimer, nextFocusHistory, nextWorkTracking);
             serverRevision.current = saved.workspace?.revision ?? serverRevision.current;
           }
           window.localStorage.setItem(recoveryKey, "complete");
@@ -666,6 +695,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       if (!active) return;
       setTasks(nextTasks);
       setProjects(nextProjects);
+      setGoals(nextGoals);
       setTodaySchedule(nextSchedule);
       setFocusTimer(nextFocusTimer);
       setFocusHistory(nextFocusHistory);
@@ -675,11 +705,12 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       }
       setFocusTask((current) => nextTasks.find((task) => task.id === nextFocusTimer.taskId && !task.completed) ?? nextTasks.find((task) => task.id === current?.id && !task.completed) ?? nextTasks.find((task) => !task.completed) ?? null);
       lastSyncedPayload.current = status === "synced" && !migratedTenHourSchedule
-        ? JSON.stringify({ tasks: nextTasks, projects: nextProjects, schedule: nextSchedule, focusTimer: nextFocusTimer, focusHistory: nextFocusHistory, workTracking: nextWorkTracking })
+        ? JSON.stringify({ tasks: nextTasks, projects: nextProjects, goals: nextGoals, schedule: nextSchedule, focusTimer: nextFocusTimer, focusHistory: nextFocusHistory, workTracking: nextWorkTracking })
         : "";
       try {
         window.localStorage.setItem(taskKey, JSON.stringify(nextTasks));
         window.localStorage.setItem(projectKey, JSON.stringify(nextProjects));
+        window.localStorage.setItem(goalKey, JSON.stringify(nextGoals));
         window.localStorage.setItem(scheduleKey, JSON.stringify(nextSchedule));
         window.localStorage.setItem(focusTimerKey, JSON.stringify(nextFocusTimer));
         window.localStorage.setItem(focusHistoryKey, JSON.stringify(nextFocusHistory));
@@ -699,10 +730,11 @@ export default function Home({ initialView = "today", initialProjectId = null }:
 
   useEffect(() => {
     if (!hydrated.current || !sessionUser) return;
-    const payload = JSON.stringify({ tasks, projects, schedule: todaySchedule, focusTimer, focusHistory, workTracking });
+    const payload = JSON.stringify({ tasks, projects, goals, schedule: todaySchedule, focusTimer, focusHistory, workTracking });
     try {
       window.localStorage.setItem(accountStorageKey("tasks", sessionUser.id), JSON.stringify(tasks));
       window.localStorage.setItem(accountStorageKey("projects", sessionUser.id), JSON.stringify(projects));
+      window.localStorage.setItem(accountStorageKey("goals", sessionUser.id), JSON.stringify(goals));
       window.localStorage.setItem(accountStorageKey("schedule", sessionUser.id), JSON.stringify(todaySchedule));
       window.localStorage.setItem(accountStorageKey("focus-timer", sessionUser.id), JSON.stringify(focusTimer));
       window.localStorage.setItem(accountStorageKey("focus-history", sessionUser.id), JSON.stringify(focusHistory));
@@ -740,7 +772,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [focusHistory, focusTimer, projects, sessionUser, syncRetry, tasks, todaySchedule, workTracking]);
+  }, [focusHistory, focusTimer, goals, projects, sessionUser, syncRetry, tasks, todaySchedule, workTracking]);
 
   useEffect(() => {
     if (!sessionUser) return;
@@ -804,12 +836,14 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     const timerKey = accountStorageKey("focus-timer", sessionUser.id);
     const historyKey = accountStorageKey("focus-history", sessionUser.id);
     const workTrackingKey = accountStorageKey("work-tracking", sessionUser.id);
+    const goalsKey = accountStorageKey("goals", sessionUser.id);
     function receiveTimerFromAnotherTab(event: StorageEvent) {
       if (!event.newValue) return;
       try {
         if (event.key === timerKey) setFocusTimer(normalizeFocusTimer(JSON.parse(event.newValue)));
         if (event.key === historyKey) setFocusHistory(normalizeFocusHistory(JSON.parse(event.newValue)));
         if (event.key === workTrackingKey) setWorkTracking(normalizeWorkTracking(JSON.parse(event.newValue)));
+        if (event.key === goalsKey) setGoals(normalizeGoals(JSON.parse(event.newValue)));
       } catch {
         // Ignore malformed storage events and keep the current timer.
       }
@@ -835,6 +869,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         const remote = {
           tasks: Array.isArray(workspace.tasks) ? workspace.tasks : INITIAL_TASKS,
           projects: Array.isArray(workspace.projects) ? workspace.projects : INITIAL_PROJECTS,
+          goals: normalizeGoals(workspace.goals),
           schedule: isScheduleWindow(workspace.schedule) ? workspace.schedule : DEFAULT_TODAY_SCHEDULE,
           focusTimer: normalizeFocusTimer(workspace.focusTimer),
           focusHistory: normalizeFocusHistory(workspace.focusHistory),
@@ -844,6 +879,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         lastSyncedPayload.current = JSON.stringify(remote);
         setTasks(remote.tasks);
         setProjects(remote.projects);
+        setGoals(remote.goals);
         setTodaySchedule(remote.schedule);
         setFocusTimer(remote.focusTimer);
         setFocusHistory(remote.focusHistory);
@@ -903,8 +939,10 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         setPaletteOpen(false);
         setTaskModalOpen(false);
         setProjectModalOpen(false);
+        setGoalModalOpen(false);
         setProjectCreateError("");
         setEditingProject(null);
+        setEditingGoal(null);
         setDeletingProject(null);
         setFocusPickerOpen(false);
         setFocusOpen(false);
@@ -964,7 +1002,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       : VIEW_TITLES[activeView];
   const isWorkTrackingView = activeView === "actuals" || activeView === "effortPlan" || activeView === "timesheetReport" || activeView === "workDashboard" || activeView === "selectionManager";
   const canEditSelectionManager = sessionUser?.canEditSelectionManager === true;
-  const taskFiltersVisible = !isWorkTrackingView && activeView !== "analytics" && activeView !== "timerHistory" && activeView !== "filtersLabels" && (activeView !== "projects" || Boolean(activeProject));
+  const taskFiltersVisible = !isWorkTrackingView && activeView !== "analytics" && activeView !== "timerHistory" && activeView !== "filtersLabels" && activeView !== "mindMap" && activeView !== "goals" && (activeView !== "projects" || Boolean(activeProject));
   const activeFilterCount = [search.trim(), priorityFilter !== "All", projectFilter !== "All", statusFilter !== "All", dueFilter !== "All", labelFilter !== "All"].filter(Boolean).length;
   const viewTaskCount = activeProject
     ? visibleTasks.filter((task) => task.project === activeProject.name).length
@@ -1030,6 +1068,18 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     setEditingTask(null);
     setDraft({ ...emptyDraft, project: defaultProject });
     setSubtaskInput("");
+    setTaskGoalCreatorOpen(false);
+    setTaskGoalTitle("");
+    setTaskModalOpen(true);
+  }
+
+  function openNewTaskForGoal(goalId: string) {
+    const defaultProject = projects[0]?.name ?? "";
+    setEditingTask(null);
+    setDraft({ ...emptyDraft, project: defaultProject, goalId });
+    setSubtaskInput("");
+    setTaskGoalCreatorOpen(false);
+    setTaskGoalTitle("");
     setTaskModalOpen(true);
   }
 
@@ -1061,6 +1111,82 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     setNewProjectDraft({ ...emptyProjectDraft, color: PROJECT_COLORS[projects.length % PROJECT_COLORS.length] });
     setProjectCreateError("");
     setProjectModalOpen(true);
+  }
+
+  function openNewGoal() {
+    setEditingGoal(null);
+    setGoalDraft({ ...emptyGoalDraft, color: GOAL_COLORS[goals.length % GOAL_COLORS.length] });
+    setGoalModalOpen(true);
+  }
+
+  function openEditGoal(goal: Goal) {
+    setEditingGoal(goal);
+    setGoalDraft({ title: goal.title, description: goal.description, color: goal.color, targetDate: goal.targetDate });
+    setGoalModalOpen(true);
+  }
+
+  function saveGoal(event: FormEvent) {
+    event.preventDefault();
+    const title = goalDraft.title.trim();
+    if (!title) return;
+    const duplicate = goals.some((goal) => goal.id !== editingGoal?.id && goal.title.toLowerCase() === title.toLowerCase());
+    if (duplicate) {
+      setToast("A goal with that title already exists");
+      return;
+    }
+
+    if (editingGoal) {
+      setGoals((current) => current.map((goal) => goal.id === editingGoal.id ? { ...goal, ...goalDraft, title, description: goalDraft.description.trim() } : goal));
+      setToast("Goal updated");
+    } else {
+      const goal: Goal = {
+        id: uniqueGoalId(title, goals),
+        title,
+        description: goalDraft.description.trim(),
+        color: goalDraft.color,
+        targetDate: goalDraft.targetDate,
+        createdAt: new Date().toISOString(),
+      };
+      setGoals((current) => [...current, goal]);
+      setToast(`${goal.title} created`);
+    }
+    setGoalModalOpen(false);
+    setEditingGoal(null);
+  }
+
+  function deleteGoal(goal: Goal) {
+    const linkedCount = tasks.filter((task) => task.goalId === goal.id).length;
+    if (!window.confirm(`Delete “${goal.title}”? ${linkedCount ? `${linkedCount} linked task${linkedCount === 1 ? "" : "s"} will be kept without a goal.` : ""}`)) return;
+    setGoals((current) => current.filter((item) => item.id !== goal.id));
+    setTasks((current) => current.map((task) => task.goalId === goal.id ? { ...task, goalId: undefined } : task));
+    setDraft((current) => current.goalId === goal.id ? { ...current, goalId: "" } : current);
+    setToast(`${goal.title} deleted · tasks kept`);
+  }
+
+  function createGoalForTask() {
+    const title = taskGoalTitle.trim();
+    if (!title) return;
+    const existing = goals.find((goal) => goal.title.toLowerCase() === title.toLowerCase());
+    if (existing) {
+      setDraft((current) => ({ ...current, goalId: existing.id }));
+      setTaskGoalCreatorOpen(false);
+      setTaskGoalTitle("");
+      setToast(`Aligned to existing goal: ${existing.title}`);
+      return;
+    }
+    const goal: Goal = {
+      id: uniqueGoalId(title, goals),
+      title,
+      description: "",
+      color: GOAL_COLORS[goals.length % GOAL_COLORS.length],
+      targetDate: "",
+      createdAt: new Date().toISOString(),
+    };
+    setGoals((current) => [...current, goal]);
+    setDraft((current) => ({ ...current, goalId: goal.id }));
+    setTaskGoalCreatorOpen(false);
+    setTaskGoalTitle("");
+    setToast(`${goal.title} created and selected`);
   }
 
   function createProject(event: FormEvent) {
@@ -1152,9 +1278,17 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       labels: task.labels ?? [],
       subtasks: task.subtasks ?? [],
       recurrence: task.recurrence ?? "none",
+      goalId: task.goalId ?? "",
     });
     setSubtaskInput("");
+    setTaskGoalCreatorOpen(false);
+    setTaskGoalTitle("");
     setTaskModalOpen(true);
+  }
+
+  function openEditTaskById(taskId: number) {
+    const task = tasks.find((item) => item.id === taskId);
+    if (task) openEditTask(task);
   }
 
   function addDraftSubtask() {
@@ -1298,6 +1432,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     { view: "inbox", label: "Inbox", icon: Inbox, count: openTasks.length },
     { view: "upcoming", label: "Upcoming", icon: CalendarDays },
     { view: "planner", label: "Planner", icon: Clock3 },
+    { view: "mindMap", label: "Mind Map", icon: Network, count: openTasks.length },
+    { view: "goals", label: "Goals", icon: Target, count: goals.length },
     { view: "actuals", label: "Actuals", icon: Rows3 },
     { view: "effortPlan", label: "Effort Plan", icon: CalendarDays },
     { view: "timesheetReport", label: "Timesheet Report", icon: BarChart3 },
@@ -1410,11 +1546,13 @@ export default function Home({ initialView = "today", initialProjectId = null }:
             <div className="heading-actions">
               <button className="secondary-button" type="button" onClick={() => setShowSearch(true)}><Search size={17} /> Search</button>
               {activeProject && <button className="primary-button" type="button" onClick={openNewTask}><Plus size={17} /> Add task</button>}
+              {activeView === "mindMap" && <button className="primary-button" type="button" onClick={openNewTask}><Plus size={17} /> Add task</button>}
+              {activeView === "goals" && <button className="primary-button" type="button" onClick={openNewGoal}><Plus size={17} /> New goal</button>}
               <button className="focus-button" type="button" onClick={openFocusPicker}><Zap size={17} fill="currentColor" /> {focusTimer.status === "idle" ? "Start focus" : `Focus · ${timeLabel(secondsLeft)}`} <kbd>F</kbd></button>
             </div>
           </section>
 
-          {activeView !== "timerHistory" && !isWorkTrackingView && (
+          {activeView !== "timerHistory" && activeView !== "goals" && !isWorkTrackingView && (
             <form className="quick-capture" onSubmit={addQuickTask}>
               <span className="quick-capture-icon"><Sparkles size={18} /></span>
               <div className="quick-capture-field">
@@ -1471,6 +1609,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           {activeView === "board" && <BoardView tasks={visibleTasks} onAdd={openNewTask} onMove={moveTask} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "upcoming" && <UpcomingView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "planner" && <PlannerView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "mindMap" && <MindMapView goals={goals} tasks={tasks} onEditTask={openEditTaskById} onCreateGoal={openNewGoal} />}
+          {activeView === "goals" && <GoalsView goals={goals} tasks={tasks} onCreateGoal={openNewGoal} onEditGoal={openEditGoal} onDeleteGoal={deleteGoal} onAddTask={openNewTaskForGoal} onEditTask={openEditTaskById} />}
           {activeView === "filtersLabels" && <FiltersLabelsView tasks={tasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "inbox" && <ListView tasks={visibleTasks.filter((task) => !task.completed)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "completed" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="Complete a task and it will appear here." />}
@@ -1488,7 +1628,8 @@ export default function Home({ initialView = "today", initialProjectId = null }:
       </main>
 
       <div className="floating-controls">
-        {!isWorkTrackingView && <button className="mobile-add" onClick={openNewTask} aria-label="Add task"><Plus size={22} /></button>}
+        {!isWorkTrackingView && activeView !== "goals" && <button className="mobile-add" onClick={openNewTask} aria-label="Add task"><Plus size={22} /></button>}
+        {activeView === "goals" && <button className="mobile-add" onClick={openNewGoal} aria-label="Add goal"><Plus size={22} /></button>}
       </div>
 
       {taskModalOpen && (
@@ -1503,7 +1644,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               <label className="field-label">Time<input value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label>
               <label className="field-label">Estimate<select value={draft.duration} onChange={(event) => setDraft({ ...draft, duration: Number(event.target.value) })}><option value={15}>15 minutes</option><option value={30}>30 minutes</option><option value={45}>45 minutes</option><option value={60}>1 hour</option><option value={90}>1.5 hours</option><option value={120}>2 hours</option></select></label>
               <label className="field-label">Repeat<select value={draft.recurrence} onChange={(event) => setDraft({ ...draft, recurrence: event.target.value as Recurrence })}><option value="none">Does not repeat</option><option value="daily">Every day</option><option value="weekdays">Every weekday</option><option value="weekly">Every week</option><option value="monthly">Every month</option></select></label>
+              <label className="field-label">Goal <span className="optional-field">Optional</span><select value={draft.goalId} onChange={(event) => { if (event.target.value === "__new__") { setTaskGoalCreatorOpen(true); setTaskGoalTitle(""); } else { setTaskGoalCreatorOpen(false); setDraft({ ...draft, goalId: event.target.value }); } }}><option value="">No goal</option>{goals.map((goal) => <option value={goal.id} key={goal.id}>{goal.title}</option>)}<option value="__new__">＋ Create new goal…</option></select></label>
             </div>
+            {taskGoalCreatorOpen && <div className="inline-goal-creator"><span><Target size={17} /></span><label><span>New goal title</span><input autoFocus value={taskGoalTitle} onChange={(event) => setTaskGoalTitle(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); createGoalForTask(); } }} placeholder="e.g. Earn QA leadership promotion" maxLength={120} /></label><button type="button" onClick={createGoalForTask} disabled={!taskGoalTitle.trim()}>Create & select</button><button type="button" className="inline-goal-cancel" onClick={() => { setTaskGoalCreatorOpen(false); setTaskGoalTitle(""); }} aria-label="Cancel goal creation"><X size={15} /></button></div>}
             <label className="field-label">Labels<input value={draft.labels.join(", ")} onChange={(event) => setDraft({ ...draft, labels: event.target.value.split(",") })} placeholder="client, qa, waiting" /></label>
             <label className="field-label">Notes<textarea value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} placeholder="Add helpful context…" rows={3} /></label>
             <div className="subtask-editor">
@@ -1523,6 +1666,22 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               <button className="secondary-button" type="button" onClick={() => setTaskModalOpen(false)}>Cancel</button>
               <button className="primary-button" type="submit">{editingTask ? "Save changes" : "Create task"}<ArrowRight size={17} /></button>
             </div>
+          </form>
+        </div>
+      )}
+
+      {goalModalOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setGoalModalOpen(false)}>
+          <form className="task-modal goal-modal" onSubmit={saveGoal} role="dialog" aria-modal="true" aria-labelledby="goal-modal-title">
+            <div className="modal-header"><div><p className="eyebrow">Outcome with intention</p><h2 id="goal-modal-title">{editingGoal ? "Edit goal" : "Create goal"}</h2></div><button className="icon-button" type="button" onClick={() => setGoalModalOpen(false)} aria-label="Close"><X size={20} /></button></div>
+            <label className="field-label">Goal title<input autoFocus value={goalDraft.title} onChange={(event) => setGoalDraft({ ...goalDraft, title: event.target.value })} placeholder="What outcome do you want to achieve?" maxLength={120} required /></label>
+            <label className="field-label">Description<textarea value={goalDraft.description} onChange={(event) => setGoalDraft({ ...goalDraft, description: event.target.value })} placeholder="Describe what success looks like…" maxLength={500} rows={3} /></label>
+            <div className="form-grid goal-form-grid">
+              <label className="field-label">Target date <span className="optional-field">Optional</span><input type="date" value={goalDraft.targetDate} onChange={(event) => setGoalDraft({ ...goalDraft, targetDate: event.target.value })} /></label>
+              <fieldset className="goal-color-field"><legend>Goal color</legend><div>{GOAL_COLORS.map((color) => <button type="button" className={goalDraft.color === color ? "active" : ""} key={color} onClick={() => setGoalDraft({ ...goalDraft, color })} aria-label={`Use ${color} goal color`} aria-pressed={goalDraft.color === color}><span style={{ background: color }} />{goalDraft.color === color && <Check size={13} />}</button>)}</div></fieldset>
+            </div>
+            <div className="goal-modal-preview" style={{ borderColor: goalDraft.color }}><Target size={18} style={{ color: goalDraft.color }} /><div><strong>{goalDraft.title.trim() || "Your goal"}</strong><small>{goalDraft.targetDate ? `Target ${goalDraft.targetDate}` : "No target date"}</small></div></div>
+            <div className="modal-actions"><span /><button className="secondary-button" type="button" onClick={() => setGoalModalOpen(false)}>Cancel</button><button className="primary-button" type="submit">{editingGoal ? "Save goal" : "Create goal"}<ArrowRight size={17} /></button></div>
           </form>
         </div>
       )}
@@ -1631,6 +1790,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
           commands={[
             { id: "new-task", title: "New task", hint: "Open the full task form", icon: Plus, keywords: "add create task", run: openNewTask },
             { id: "new-project", title: "New project", hint: "Start a new outcome", icon: Folder, keywords: "add create project", run: openNewProject },
+            { id: "new-goal", title: "New goal", hint: "Connect work to an outcome", icon: Target, keywords: "add create goal outcome", run: openNewGoal },
             { id: "focus", title: "Start focus session", hint: "25 minutes of deep work", icon: Zap, keywords: "timer pomodoro deep work", run: openFocusPicker },
             { id: "theme", title: `Switch to ${theme === "dark" ? "light" : "dark"} mode`, hint: "Toggle the theme", icon: theme === "dark" ? Sun : Moon, keywords: "theme dark light appearance", run: toggleTheme },
             ...navItems.map((item) => ({ id: `view-${item.view}`, title: `Go to ${item.label}`, hint: "View", icon: item.icon, keywords: `view navigate ${item.label}`, run: () => navigate(item.view) })),

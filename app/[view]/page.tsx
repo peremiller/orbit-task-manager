@@ -6,6 +6,8 @@ const ROUTE_VIEWS: Record<string, View> = {
   inbox: "inbox",
   upcoming: "upcoming",
   planner: "planner",
+  "mind-map": "mindMap",
+  goals: "goals",
   board: "board",
   "filters-labels": "filtersLabels",
   projects: "projects",

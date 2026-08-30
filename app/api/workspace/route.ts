@@ -3,10 +3,12 @@ import { getOrbitWorkspace, normalizeScheduleWindow, saveOrbitWorkspace, type Sc
 import { canEditSelectionManager, ORBIT_SESSION_COOKIE, verifyOrbitSession } from "../../../lib/orbit-auth";
 import { normalizeFocusHistory, normalizeFocusTimer, type FocusHistoryEntry, type FocusTimerState } from "../../../lib/focus-timer";
 import { createDefaultWorkTrackingState, normalizeWorkTracking, type WorkTrackingState } from "../../../lib/work-tracking";
+import { normalizeGoals, type Goal } from "../../../lib/goals";
 
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_TASKS = 2_000;
 const MAX_PROJECTS = 500;
+const MAX_GOALS = 250;
 const MAX_FOCUS_HISTORY = 500;
 const MAX_WORK_ITEMS = 1_000;
 const MAX_ACTUAL_ENTRIES = 5_000;
@@ -43,12 +45,22 @@ export async function PUT(request: Request) {
       return Response.json({ error: "Workspace is too large" }, { status: 413 });
     }
 
-    const body = JSON.parse(rawBody) as { tasks?: unknown; projects?: unknown; schedule?: unknown; focusTimer?: unknown; focusHistory?: unknown; workTracking?: unknown };
+    const body = JSON.parse(rawBody) as { tasks?: unknown; projects?: unknown; goals?: unknown; schedule?: unknown; focusTimer?: unknown; focusHistory?: unknown; workTracking?: unknown };
     if (!Array.isArray(body.tasks) || !Array.isArray(body.projects)) {
       return Response.json({ error: "Tasks and projects must be arrays" }, { status: 400 });
     }
     if (body.tasks.length > MAX_TASKS || body.projects.length > MAX_PROJECTS) {
       return Response.json({ error: "Workspace has too many items" }, { status: 413 });
+    }
+    let goals: Goal[] | undefined;
+    if (body.goals !== undefined) {
+      if (!Array.isArray(body.goals) || body.goals.length > MAX_GOALS) {
+        return Response.json({ error: "Goals are invalid" }, { status: 400 });
+      }
+      goals = normalizeGoals(body.goals);
+      if (goals.length !== body.goals.length) {
+        return Response.json({ error: "Goals contain invalid entries" }, { status: 400 });
+      }
     }
     let schedule: ScheduleWindow | undefined;
     if (body.schedule !== undefined) {
@@ -94,7 +106,7 @@ export async function PUT(request: Request) {
       }
     }
 
-    const workspace = await saveOrbitWorkspace(user.id, body.tasks, body.projects, schedule, focusTimer, focusHistory, workTracking);
+    const workspace = await saveOrbitWorkspace(user.id, body.tasks, body.projects, goals, schedule, focusTimer, focusHistory, workTracking);
     return Response.json({ workspace }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof SyntaxError) return Response.json({ error: "Invalid JSON" }, { status: 400 });
