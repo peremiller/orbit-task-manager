@@ -76,8 +76,11 @@ jobs:
       - name: Verify graph
         run: |
           test -s graphify-out/graph.json
-          test -s graphify-out/GRAPH_REPORT.md
+          test -s graphify-out/manifest.json
+          test -s graphify-out/BUILD_METADATA.json
           python -m json.tool graphify-out/graph.json >/dev/null
+          python -m json.tool graphify-out/manifest.json >/dev/null
+          python -m json.tool graphify-out/BUILD_METADATA.json >/dev/null
 
       - name: Upload graph artifact
         uses: actions/upload-artifact@v4
