@@ -484,7 +484,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [activeProjectId, setActiveProjectId] = useState<string | null>(initialProjectId);
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<"All" | Priority>("All");
-  const [projectFilter, setProjectFilter] = useState("All");
+  const [projectFilter, setProjectFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [dueFilter, setDueFilter] = useState("All");
   const [labelFilter, setLabelFilter] = useState("All");
@@ -956,7 +956,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const karma = useMemo(() => computeKarma(tasks, dailyGoal, new Date(clockNow)), [clockNow, dailyGoal, tasks]);
 
   const visibleTasks = useMemo(() => {
-    return filterTasks(tasks, { search, priority: priorityFilter, project: projectFilter, status: statusFilter, due: dueFilter, label: labelFilter });
+    return filterTasks(tasks, { search, priority: priorityFilter, projects: projectFilter, status: statusFilter, due: dueFilter, label: labelFilter });
   }, [dueFilter, labelFilter, priorityFilter, projectFilter, search, statusFilter, tasks]);
 
   const inboxPriorityProjects = useMemo<PriorityProjectFilter[]>(() => {
@@ -965,7 +965,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     const matchingTasks = filterTasks(tasks, {
       search,
       priority: priorityFilter,
-      project: "All",
+      projects: [],
       status: statusFilter,
       due: dueFilter,
       label: labelFilter,
@@ -1003,7 +1003,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const isWorkTrackingView = activeView === "actuals" || activeView === "effortPlan" || activeView === "timesheetReport" || activeView === "workDashboard" || activeView === "selectionManager";
   const canEditSelectionManager = sessionUser?.canEditSelectionManager === true;
   const taskFiltersVisible = !isWorkTrackingView && activeView !== "analytics" && activeView !== "timerHistory" && activeView !== "filtersLabels" && activeView !== "mindMap" && activeView !== "goals" && (activeView !== "projects" || Boolean(activeProject));
-  const activeFilterCount = [search.trim(), priorityFilter !== "All", projectFilter !== "All", statusFilter !== "All", dueFilter !== "All", labelFilter !== "All"].filter(Boolean).length;
+  const activeFilterCount = [search.trim(), projectFilter.length > 0, priorityFilter !== "All", statusFilter !== "All", dueFilter !== "All", labelFilter !== "All"].filter(Boolean).length;
   const viewTaskCount = activeProject
     ? visibleTasks.filter((task) => task.project === activeProject.name).length
     : activeView === "inbox" || activeView === "upcoming"
@@ -1034,7 +1034,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   function clearTaskFilters() {
     setSearch("");
     setPriorityFilter("All");
-    setProjectFilter("All");
+    setProjectFilter([]);
     setStatusFilter("All");
     setDueFilter("All");
     setLabelFilter("All");
@@ -1050,7 +1050,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   function navigateProject(project: Project) {
     setActiveView("projects");
     setActiveProjectId(project.id);
-    setProjectFilter("All");
+    setProjectFilter([]);
     setMobileMenuOpen(false);
     router.push(`/projects/${project.id}`);
   }
@@ -1232,7 +1232,9 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     setProjects(remainingProjects);
     setTasks(remainingTasks);
     setFocusTask((current) => current?.project === project.name ? remainingTasks.find((task) => !task.completed) ?? null : current);
-    if (projectFilter === project.name) setProjectFilter("All");
+    if (projectFilter.includes(project.name)) {
+      setProjectFilter((current) => current.filter((name) => name !== project.name));
+    }
     if (draft.project === project.name) setDraft((current) => ({ ...current, project: remainingProjects[0]?.name ?? "" }));
     if (activeProjectId === project.id) {
       setActiveProjectId(null);
@@ -1259,7 +1261,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     const previousName = editingProject.name;
     setProjects((current) => current.map((project) => project.id === editingProject.id ? { ...project, name: nextName } : project));
     setTasks((current) => current.map((task) => task.project === previousName ? { ...task, project: nextName } : task));
-    setProjectFilter((current) => current === previousName ? nextName : current);
+    setProjectFilter((current) => current.map((name) => name === previousName ? nextName : name));
     setDraft((current) => current.project === previousName ? { ...current, project: nextName } : current);
     setEditingProject(null);
     setToast(`Project renamed to ${nextName}`);
@@ -1808,7 +1810,7 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, label,
   tasks: Task[];
   projects: Project[];
   priority: "All" | Priority;
-  project: string;
+  project: string[];
   status: StatusFilter;
   due: string;
   label: string;
@@ -1819,7 +1821,7 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, label,
   showPriorityProjectPills: boolean;
   priorityProjects: PriorityProjectFilter[];
   onPriorityChange: (value: "All" | Priority) => void;
-  onProjectChange: (value: string) => void;
+  onProjectChange: (value: string[]) => void;
   onStatusChange: (value: StatusFilter) => void;
   onDueChange: (value: string) => void;
   onLabelChange: (value: string) => void;
@@ -1828,6 +1830,17 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, label,
   const dueOptions = Array.from(new Set(tasks.map((task) => task.due)));
   const labelOptions = Array.from(new Set(tasks.flatMap((task) => task.labels ?? []))).sort();
   const matchingProjectTaskCount = priorityProjects.reduce((total, item) => total + item.count, 0);
+  const selectedProjectLabel = project.length === 0
+    ? "All projects"
+    : project.length === 1
+      ? project[0]
+      : `${project.length} projects`;
+
+  function toggleProject(projectName: string) {
+    onProjectChange(project.includes(projectName)
+      ? project.filter((name) => name !== projectName)
+      : [...project, projectName]);
+  }
 
   return (
     <>
@@ -1849,13 +1862,30 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, label,
             </select>
           </label>
           {showProjectFilter && (
-            <label className="task-filter-control">
+            <div className="task-filter-control project-multi-filter">
               <span>Project</span>
-              <select value={project} onChange={(event) => onProjectChange(event.target.value)}>
-                <option value="All">All projects</option>
-                {projects.map((item) => <option value={item.name} key={item.id}>{item.name}</option>)}
-              </select>
-            </label>
+              <details>
+                <summary title={project.length ? project.join(", ") : "Show tasks from every project"}>
+                  <span>{selectedProjectLabel}</span>
+                  <em>{project.length ? project.length : "All"}</em>
+                </summary>
+                <div className="project-multi-menu">
+                  <div className="project-multi-heading">
+                    <div><strong>Select projects</strong><small>Choose one or more</small></div>
+                    <button type="button" onClick={() => onProjectChange([])} disabled={project.length === 0}>All projects</button>
+                  </div>
+                  <div className="project-multi-options">
+                    {projects.map((item) => (
+                      <label className="project-multi-option" key={item.id}>
+                        <input type="checkbox" checked={project.includes(item.name)} onChange={() => toggleProject(item.name)} />
+                        <i style={{ background: item.color }} />
+                        <span>{item.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </details>
+            </div>
           )}
           <label className="task-filter-control">
             <span>Status</span>
@@ -1888,16 +1918,16 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, label,
         <section className="inbox-project-filter-bar" aria-labelledby="inbox-project-filter-title">
           <div className="inbox-project-filter-heading">
             <strong id="inbox-project-filter-title">Projects with {priority} priority tasks</strong>
-            <small>{priorityProjects.length ? "Select a project to narrow the Inbox" : "No Inbox projects match the current filters"}</small>
+            <small>{priorityProjects.length ? "Select one or more projects to narrow the Inbox" : "No Inbox projects match the current filters"}</small>
           </div>
           <div className="inbox-project-pills" role="group" aria-label={`Filter ${priority} priority tasks by project`}>
-            <button type="button" className={project === "All" ? "active" : ""} aria-pressed={project === "All"} onClick={() => onProjectChange("All")}>
+            <button type="button" className={project.length === 0 ? "active" : ""} aria-pressed={project.length === 0} onClick={() => onProjectChange([])}>
               <span className="project-filter-dot all-projects" />
               All projects
               <em>{matchingProjectTaskCount}</em>
             </button>
             {priorityProjects.map((item) => (
-              <button type="button" key={item.name} className={project === item.name ? "active" : ""} aria-pressed={project === item.name} onClick={() => onProjectChange(item.name)}>
+              <button type="button" key={item.name} className={project.includes(item.name) ? "active" : ""} aria-pressed={project.includes(item.name)} onClick={() => toggleProject(item.name)}>
                 <span className="project-filter-dot" style={{ background: item.color }} />
                 <span>{item.name}</span>
                 <em>{item.count}</em>
