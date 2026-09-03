@@ -7,6 +7,28 @@ export type TaskFilterValues = {
   label?: string;
 };
 
+const PROJECT_FILTER_QUERY_KEY = "project";
+
+export function normalizeProjectFilterQuery(value: string | string[] | undefined): string[] {
+  const values = Array.isArray(value) ? value : value ? [value] : [];
+  return Array.from(new Set(values.map((project) => project.trim()).filter(Boolean)));
+}
+
+export function projectFilterHref(href: string, projects: string[]): string {
+  const hashIndex = href.indexOf("#");
+  const hash = hashIndex >= 0 ? href.slice(hashIndex) : "";
+  const hrefWithoutHash = hashIndex >= 0 ? href.slice(0, hashIndex) : href;
+  const queryIndex = hrefWithoutHash.indexOf("?");
+  const pathname = queryIndex >= 0 ? hrefWithoutHash.slice(0, queryIndex) : hrefWithoutHash;
+  const params = new URLSearchParams(queryIndex >= 0 ? hrefWithoutHash.slice(queryIndex + 1) : "");
+
+  params.delete(PROJECT_FILTER_QUERY_KEY);
+  normalizeProjectFilterQuery(projects).forEach((project) => params.append(PROJECT_FILTER_QUERY_KEY, project));
+
+  const query = params.toString();
+  return `${pathname}${query ? `?${query}` : ""}${hash}`;
+}
+
 type FilterableTask = {
   title: string;
   project: string;

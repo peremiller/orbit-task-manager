@@ -59,7 +59,7 @@ import {
   type FocusTimerState,
 } from "@/lib/focus-timer";
 import { computeKarma, clampDailyGoal, KARMA_LEVELS, type KarmaStats } from "@/lib/karma";
-import { filterTasks } from "@/lib/task-filters";
+import { filterTasks, normalizeProjectFilterQuery, projectFilterHref } from "@/lib/task-filters";
 import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-recovery";
 import { createDefaultWorkTrackingState, normalizeWorkTracking, type WorkTrackingState } from "@/lib/work-tracking";
 import { GOAL_COLORS, normalizeGoals, uniqueGoalId, type Goal } from "@/lib/goals";
@@ -474,7 +474,7 @@ async function saveWorkspace(tasks: Task[], projects: Project[], goals: Goal[], 
   return response.json() as Promise<WorkspaceResponse>;
 }
 
-export default function Home({ initialView = "today", initialProjectId = null }: { initialView?: View; initialProjectId?: string | null }) {
+export default function Home({ initialView = "today", initialProjectId = null, initialProjectFilter = [] }: { initialView?: View; initialProjectId?: string | null; initialProjectFilter?: string[] }) {
   const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
   const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
@@ -484,7 +484,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   const [activeProjectId, setActiveProjectId] = useState<string | null>(initialProjectId);
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<"All" | Priority>("All");
-  const [projectFilter, setProjectFilter] = useState<string[]>([]);
+  const [projectFilter, setProjectFilter] = useState<string[]>(() => normalizeProjectFilterQuery(initialProjectFilter));
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [dueFilter, setDueFilter] = useState("All");
   const [labelFilter, setLabelFilter] = useState("All");
@@ -561,7 +561,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         if (active) setSessionUser(user);
       })
       .catch(() => {
-        if (active) window.location.replace(`/login?returnTo=${encodeURIComponent(window.location.pathname)}`);
+        if (active) window.location.replace(`/login?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
       });
     return () => { active = false; };
   }, [router]);
@@ -727,6 +727,16 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     void hydrateWorkspace();
     return () => { active = false; };
   }, [sessionUser]);
+
+  useEffect(() => {
+    const loadProjectFilter = window.setTimeout(() => {
+      const projectsFromUrl = normalizeProjectFilterQuery(new URLSearchParams(window.location.search).getAll("project"));
+      setProjectFilter((current) => current.length === projectsFromUrl.length && current.every((project, index) => project === projectsFromUrl[index])
+        ? current
+        : projectsFromUrl);
+    }, 0);
+    return () => window.clearTimeout(loadProjectFilter);
+  }, []);
 
   useEffect(() => {
     if (!hydrated.current || !sessionUser) return;
@@ -1034,23 +1044,30 @@ export default function Home({ initialView = "today", initialProjectId = null }:
   function clearTaskFilters() {
     setSearch("");
     setPriorityFilter("All");
-    setProjectFilter([]);
+    changeProjectFilter([]);
     setStatusFilter("All");
     setDueFilter("All");
     setLabelFilter("All");
+  }
+
+  function changeProjectFilter(nextProjects: string[]) {
+    const normalizedProjects = normalizeProjectFilterQuery(nextProjects);
+    setProjectFilter(normalizedProjects);
+    const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    window.history.replaceState(window.history.state, "", projectFilterHref(currentHref, normalizedProjects));
   }
 
   function navigate(view: View) {
     setActiveView(view);
     setActiveProjectId(null);
     setMobileMenuOpen(false);
-    router.push(VIEW_PATHS[view]);
+    router.push(projectFilterHref(VIEW_PATHS[view], projectFilter));
   }
 
   function navigateProject(project: Project) {
     setActiveView("projects");
     setActiveProjectId(project.id);
-    setProjectFilter([]);
+    changeProjectFilter([]);
     setMobileMenuOpen(false);
     router.push(`/projects/${project.id}`);
   }
@@ -1233,7 +1250,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     setTasks(remainingTasks);
     setFocusTask((current) => current?.project === project.name ? remainingTasks.find((task) => !task.completed) ?? null : current);
     if (projectFilter.includes(project.name)) {
-      setProjectFilter((current) => current.filter((name) => name !== project.name));
+      changeProjectFilter(projectFilter.filter((name) => name !== project.name));
     }
     if (draft.project === project.name) setDraft((current) => ({ ...current, project: remainingProjects[0]?.name ?? "" }));
     if (activeProjectId === project.id) {
@@ -1261,7 +1278,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
     const previousName = editingProject.name;
     setProjects((current) => current.map((project) => project.id === editingProject.id ? { ...project, name: nextName } : project));
     setTasks((current) => current.map((task) => task.project === previousName ? { ...task, project: nextName } : task));
-    setProjectFilter((current) => current.map((name) => name === previousName ? nextName : name));
+    changeProjectFilter(projectFilter.map((name) => name === previousName ? nextName : name));
     setDraft((current) => current.project === previousName ? { ...current, project: nextName } : current);
     setEditingProject(null);
     setToast(`Project renamed to ${nextName}`);
@@ -1476,7 +1493,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
         <div className="sidebar-section">
           <div className="section-label">
             <Link
-              href="/projects"
+              href={projectFilterHref("/projects", projectFilter)}
               className="section-label-link"
               aria-label="View all projects"
               aria-current={activeView === "projects" && !activeProjectId ? "page" : undefined}
@@ -1582,7 +1599,7 @@ export default function Home({ initialView = "today", initialProjectId = null }:
               showPriorityProjectPills={activeView === "inbox" && priorityFilter !== "All"}
               priorityProjects={inboxPriorityProjects}
               onPriorityChange={setPriorityFilter}
-              onProjectChange={setProjectFilter}
+              onProjectChange={changeProjectFilter}
               onStatusChange={setStatusFilter}
               onDueChange={setDueFilter}
               onLabelChange={setLabelFilter}
