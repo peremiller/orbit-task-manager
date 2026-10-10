@@ -68,6 +68,7 @@ import { GoalsView, MindMapView } from "./goal-views";
 import { KanbanView } from "./kanban-view";
 import { DEFAULT_KANBAN_COLUMNS, normalizeKanbanColumns, taskColumnId, type KanbanColumn } from "@/lib/kanban";
 import type { TaskAttachment } from "@/lib/task-attachments";
+import { TaskSheet, type TaskCellPatch } from "./task-sheet";
 
 type Priority = "Very High" | "High" | "Medium" | "Low";
 export type TaskStatus = "todo" | "in-progress" | "done";
@@ -507,6 +508,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const [goals, setGoals] = useState<Goal[]>([]);
   const [todaySchedule, setTodaySchedule] = useState<ScheduleWindow>(DEFAULT_TODAY_SCHEDULE);
   const [activeView, setActiveView] = useState<View>(initialView);
+  const [taskLayout, setTaskLayout] = useState<"sheet" | "original">("sheet");
   const [activeProjectId, setActiveProjectId] = useState<string | null>(initialProjectId);
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<"All" | Priority>("All");
@@ -1053,14 +1055,14 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const activeFilterCount = [search.trim(), projectFilter.length > 0, priorityFilter !== "All", statusFilter !== "All", dueFilter !== "All", labelFilter !== "All"].filter(Boolean).length;
   const viewTaskCount = activeProject
     ? visibleTasks.filter((task) => task.project === activeProject.name).length
-    : activeView === "inbox" || activeView === "upcoming"
+    : activeView === "inbox" || activeView === "upcoming" || activeView === "planner"
         ? visibleTasks.filter((task) => !task.completed).length
         : activeView === "completed"
           ? visibleTasks.filter((task) => task.completed).length
           : visibleTasks.length;
   const totalViewTaskCount = activeProject
     ? tasks.filter((task) => task.project === activeProject.name).length
-    : activeView === "inbox" || activeView === "upcoming"
+    : activeView === "inbox" || activeView === "upcoming" || activeView === "planner"
         ? tasks.filter((task) => !task.completed).length
         : activeView === "completed"
           ? tasks.filter((task) => task.completed).length
@@ -1427,6 +1429,12 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     setToast(`Task moved to ${column.title}`);
   }
 
+  function updateTaskCell(id: number, patch: TaskCellPatch) {
+    if (patch.title !== undefined && !patch.title.trim()) return;
+    setTasks(current => current.map(task => task.id === id ? { ...task, ...patch, ...(patch.title !== undefined ? { title: patch.title.trim() } : {}) } : task));
+    setToast("Task updated");
+  }
+
   function updateKanbanColumns(next: KanbanColumn[], transferTo?: string) {
     setTasks(current => {
       // Pin implicit placements before reordering so notes stay in their columns.
@@ -1708,13 +1716,24 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           )}
           {activeView === "board" && <BoardView tasks={visibleTasks} onAdd={openNewTask} onMove={moveTask} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "kanban" && <KanbanView tasks={visibleTasks} allTasks={tasks} columns={kanbanColumns} onColumnsChange={updateKanbanColumns} onAdd={openNewTask} onMove={moveKanbanTask} onEdit={openEditTask} onFocus={openFocus} onAttachmentsChange={updateTaskAttachments} />}
-          {activeView === "upcoming" && <UpcomingView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
-          {activeView === "planner" && <PlannerView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {["inbox", "upcoming", "planner", "completed"].includes(activeView) && <div className="task-view-switcher" role="group" aria-label="Task view">
+            <button type="button" aria-pressed={taskLayout === "sheet"} onClick={() => setTaskLayout("sheet")}><Rows3 size={16} />Sheet</button>
+            <button type="button" aria-pressed={taskLayout === "original"} onClick={() => setTaskLayout("original")}><LayoutGrid size={16} />{activeView === "upcoming" ? "Timeline" : activeView === "planner" ? "Capacity" : "List"}</button>
+          </div>}
+          {["inbox", "upcoming", "planner", "completed"].includes(activeView) && taskLayout === "sheet" && <TaskSheet
+            tasks={visibleTasks.filter(task => activeView === "completed" ? task.completed : !task.completed)}
+            projects={projects} title={`${VIEW_TITLES[activeView].title} task sheet`}
+            groupByDue={activeView === "upcoming" || activeView === "planner"} planner={activeView === "planner"}
+            empty={activeView === "completed" ? "Complete a task and it will appear here, with its completion date." : undefined}
+            onAdd={openNewTask} onEdit={openEditTask} onStatusChange={moveTask} onCellChange={updateTaskCell}
+          />}
+          {activeView === "upcoming" && taskLayout === "original" && <UpcomingView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "planner" && taskLayout === "original" && <PlannerView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "mindMap" && <MindMapView goals={goals} tasks={tasks} onEditTask={openEditTaskById} onCreateGoal={openNewGoal} />}
           {activeView === "goals" && <GoalsView goals={goals} tasks={tasks} onCreateGoal={openNewGoal} onEditGoal={openEditGoal} onDeleteGoal={deleteGoal} onAddTask={openNewTaskForGoal} onEditTask={openEditTaskById} />}
           {activeView === "filtersLabels" && <FiltersLabelsView tasks={tasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
-          {activeView === "inbox" && <ListView tasks={visibleTasks.filter((task) => !task.completed)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
-          {activeView === "completed" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="Complete a task and it will appear here." />}
+          {activeView === "inbox" && taskLayout === "original" && <ListView tasks={visibleTasks.filter((task) => !task.completed)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "completed" && taskLayout === "original" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
             ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="This project is ready for its first task." />
             : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} />)}

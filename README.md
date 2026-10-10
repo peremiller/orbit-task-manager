@@ -8,6 +8,9 @@ A calm, modern task management experience for clear priorities, focused work, an
 - Goals workspace with optional task-to-goal alignment, progress, target dates, and inline goal creation
 - Real-time Mind Map and weighted Word Map views of every open task, grouped by goal
 - Task creation, editing, deletion, search, filtering, and completion
+- Spreadsheet-style default view in Inbox, Upcoming, Planner, and Completed with a black header, gridlines, and gray/amber/green status dropdowns
+- Five shared columns: Workstream (project), Task, Status, Date Completed, and Remarks (notes); inline task/remarks edits and workstream selection use existing workspace sync
+- Completion dates and recurring-task behavior stay shared with the other views; switch back to List, Timeline, or Capacity at any time
 - Drag-and-drop workflow board
 - Sticky-note Kanban at `/kanban` with up to 30 editable columns: names, descriptions, colors, and To do / In progress / Done behavior
 - Drag column grips to reorder, or use each column’s left/right buttons; column settings and task placements sync with the account workspace
