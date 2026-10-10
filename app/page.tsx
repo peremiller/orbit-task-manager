@@ -69,6 +69,7 @@ import { KanbanView } from "./kanban-view";
 import { DEFAULT_KANBAN_COLUMNS, normalizeKanbanColumns, taskColumnId, type KanbanColumn } from "@/lib/kanban";
 import type { TaskAttachment } from "@/lib/task-attachments";
 import { TaskSheet, type TaskCellPatch } from "./task-sheet";
+import { BackToTop } from "./back-to-top";
 
 type Priority = "Very High" | "High" | "Medium" | "Low";
 export type TaskStatus = "todo" | "in-progress" | "done";
@@ -1623,7 +1624,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
 
       {mobileMenuOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setMobileMenuOpen(false)} />}
 
-      <main className="workspace">
+      <main id="orbit-workspace" className="workspace" tabIndex={-1}>
         <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation"><Menu size={21} /></button>
           <div className={`search-box ${showSearch ? "search-visible" : ""}`}>
@@ -1750,6 +1751,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       <div className="floating-controls">
         {!isWorkTrackingView && activeView !== "goals" && <button className="mobile-add" onClick={openNewTask} aria-label="Add task"><Plus size={22} /></button>}
         {activeView === "goals" && <button className="mobile-add" onClick={openNewGoal} aria-label="Add goal"><Plus size={22} /></button>}
+        <BackToTop />
       </div>
 
       {taskModalOpen && (
