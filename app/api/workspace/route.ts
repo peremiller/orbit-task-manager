@@ -4,6 +4,7 @@ import { canEditSelectionManager, ORBIT_SESSION_COOKIE, verifyOrbitSession } fro
 import { normalizeFocusHistory, normalizeFocusTimer, type FocusHistoryEntry, type FocusTimerState } from "../../../lib/focus-timer";
 import { createDefaultWorkTrackingState, normalizeWorkTracking, type WorkTrackingState } from "../../../lib/work-tracking";
 import { normalizeGoals, type Goal } from "../../../lib/goals";
+import { parseKanbanColumns, type KanbanColumn } from "../../../lib/kanban";
 
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_TASKS = 2_000;
@@ -45,7 +46,7 @@ export async function PUT(request: Request) {
       return Response.json({ error: "Workspace is too large" }, { status: 413 });
     }
 
-    const body = JSON.parse(rawBody) as { tasks?: unknown; projects?: unknown; goals?: unknown; schedule?: unknown; focusTimer?: unknown; focusHistory?: unknown; workTracking?: unknown };
+    const body = JSON.parse(rawBody) as { tasks?: unknown; projects?: unknown; goals?: unknown; schedule?: unknown; focusTimer?: unknown; focusHistory?: unknown; workTracking?: unknown; kanbanColumns?: unknown };
     if (!Array.isArray(body.tasks) || !Array.isArray(body.projects)) {
       return Response.json({ error: "Tasks and projects must be arrays" }, { status: 400 });
     }
@@ -106,7 +107,12 @@ export async function PUT(request: Request) {
       }
     }
 
-    const workspace = await saveOrbitWorkspace(user.id, body.tasks, body.projects, goals, schedule, focusTimer, focusHistory, workTracking);
+    let kanbanColumns: KanbanColumn[] | undefined;
+    if (body.kanbanColumns !== undefined) {
+      kanbanColumns = parseKanbanColumns(body.kanbanColumns) ?? undefined;
+      if (!kanbanColumns) return Response.json({ error: "Kanban columns are invalid" }, { status: 400 });
+    }
+    const workspace = await saveOrbitWorkspace(user.id, body.tasks, body.projects, goals, schedule, focusTimer, focusHistory, workTracking, kanbanColumns);
     return Response.json({ workspace }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof SyntaxError) return Response.json({ error: "Invalid JSON" }, { status: 400 });

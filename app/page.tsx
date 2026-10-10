@@ -66,6 +66,8 @@ import { GOAL_COLORS, normalizeGoals, uniqueGoalId, type Goal } from "@/lib/goal
 import { ActualsView, EffortPlanView, SelectionManagerView, TimesheetReportView, WorkDashboardView } from "./work-tracking-views";
 import { GoalsView, MindMapView } from "./goal-views";
 import { KanbanView } from "./kanban-view";
+import { DEFAULT_KANBAN_COLUMNS, normalizeKanbanColumns, taskColumnId, type KanbanColumn } from "@/lib/kanban";
+import type { TaskAttachment } from "@/lib/task-attachments";
 
 type Priority = "Very High" | "High" | "Medium" | "Low";
 export type TaskStatus = "todo" | "in-progress" | "done";
@@ -91,6 +93,8 @@ export type Task = {
   createdAt?: string;
   completedAt?: string;
   goalId?: string;
+  kanbanColumnId?: string;
+  attachments?: TaskAttachment[];
 };
 
 type Project = {
@@ -130,6 +134,7 @@ type WorkspaceResponse = {
     focusTimer: FocusTimerState;
     focusHistory: FocusHistoryEntry[];
     workTracking: WorkTrackingState;
+    kanbanColumns: KanbanColumn[];
     revision: number;
     updatedAt: string;
   } | null;
@@ -459,7 +464,7 @@ function scheduleTimeLabels(schedule: ScheduleWindow) {
   });
 }
 
-function accountStorageKey(kind: "tasks" | "projects" | "goals" | "schedule" | "focus-timer" | "focus-history" | "work-tracking", userId: string) {
+function accountStorageKey(kind: "tasks" | "projects" | "goals" | "schedule" | "focus-timer" | "focus-history" | "work-tracking" | "kanban-columns", userId: string) {
   return `orbit-${kind}-v1:${userId}`;
 }
 
@@ -467,11 +472,28 @@ function userInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "AJ";
 }
 
-async function saveWorkspace(tasks: Task[], projects: Project[], goals: Goal[], schedule: ScheduleWindow, focusTimer: FocusTimerState, focusHistory: FocusHistoryEntry[], workTracking: WorkTrackingState) {
+function transitionKanbanTask(current: Task[], id: number, column: KanbanColumn): Task[] {
+  const target = current.find(task => task.id === id);
+  if (!target) return current;
+  const now = new Date().toISOString();
+  const completing = column.status === "done" && !target.completed;
+  const updated = current.map(task => task.id === id ? {
+    ...task, kanbanColumnId: column.id, status: column.status, completed: column.status === "done",
+    completedAt: column.status === "done" ? task.completedAt ?? now : undefined,
+  } : task);
+  if (!completing || !target.recurrence || target.recurrence === "none") return updated;
+  return [{
+    ...target, id: Math.max(Date.now(), ...current.map(task => task.id + 1)), due: nextRecurringDue(target),
+    status: "todo", completed: false, completedAt: undefined, kanbanColumnId: undefined, createdAt: now,
+    subtasks: (target.subtasks ?? []).map(subtask => ({ ...subtask, id: Date.now() + subtask.id, completed: false })),
+  }, ...updated];
+}
+
+async function saveWorkspace(tasks: Task[], projects: Project[], goals: Goal[], schedule: ScheduleWindow, focusTimer: FocusTimerState, focusHistory: FocusHistoryEntry[], workTracking: WorkTrackingState, kanbanColumns: KanbanColumn[]) {
   const response = await fetch("/api/workspace", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tasks, projects, goals, schedule, focusTimer, focusHistory, workTracking }),
+    body: JSON.stringify({ tasks, projects, goals, schedule, focusTimer, focusHistory, workTracking, kanbanColumns }),
   });
   if (!response.ok) throw new Error("Workspace save failed");
   return response.json() as Promise<WorkspaceResponse>;
@@ -480,6 +502,7 @@ async function saveWorkspace(tasks: Task[], projects: Project[], goals: Goal[], 
 export default function Home({ initialView = "today", initialProjectId = null, initialProjectFilter = [] }: { initialView?: View; initialProjectId?: string | null; initialProjectFilter?: string[] }) {
   const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  const [kanbanColumns, setKanbanColumns] = useState<KanbanColumn[]>(DEFAULT_KANBAN_COLUMNS);
   const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [todaySchedule, setTodaySchedule] = useState<ScheduleWindow>(DEFAULT_TODAY_SCHEDULE);
@@ -531,11 +554,11 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const syncWasOffline = useRef(false);
   const serverRevision = useRef(0);
   const completingSession = useRef<string | null>(null);
-  const latestWorkspace = useRef({ tasks, projects, goals, schedule: todaySchedule, focusTimer, focusHistory, workTracking });
+  const latestWorkspace = useRef({ tasks, projects, goals, schedule: todaySchedule, focusTimer, focusHistory, workTracking, kanbanColumns });
 
   useEffect(() => {
-    latestWorkspace.current = { tasks, projects, goals, schedule: todaySchedule, focusTimer, focusHistory, workTracking };
-  }, [focusHistory, focusTimer, goals, projects, tasks, todaySchedule, workTracking]);
+    latestWorkspace.current = { tasks, projects, goals, schedule: todaySchedule, focusTimer, focusHistory, workTracking, kanbanColumns };
+  }, [focusHistory, focusTimer, goals, projects, tasks, todaySchedule, workTracking, kanbanColumns]);
 
   useEffect(() => {
     function updateLocalTime() {
@@ -583,6 +606,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       const focusTimerKey = accountStorageKey("focus-timer", user.id);
       const focusHistoryKey = accountStorageKey("focus-history", user.id);
       const workTrackingKey = accountStorageKey("work-tracking", user.id);
+      const kanbanColumnsKey = accountStorageKey("kanban-columns", user.id);
       let cachedTasks: Task[] | null = null;
       let cachedProjects: Project[] | null = null;
       let cachedGoals: Goal[] | null = null;
@@ -590,6 +614,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       let cachedFocusTimer: FocusTimerState = { ...DEFAULT_FOCUS_TIMER };
       let cachedFocusHistory: FocusHistoryEntry[] = [];
       let cachedWorkTracking = createDefaultWorkTrackingState();
+      let cachedKanbanColumns = normalizeKanbanColumns(null);
       let legacyTasksBackup: Task[] = [];
       let legacyProjectsBackup: Project[] = [];
       let legacyRecoveryComplete = false;
@@ -608,6 +633,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         const storedFocusTimer = window.localStorage.getItem(focusTimerKey);
         const storedFocusHistory = window.localStorage.getItem(focusHistoryKey);
         const storedWorkTracking = window.localStorage.getItem(workTrackingKey);
+        const storedKanbanColumns = window.localStorage.getItem(kanbanColumnsKey);
         hasCachedWorkspace = Boolean(storedTasks || storedProjects || storedGoals || storedSchedule || storedFocusTimer || storedFocusHistory || storedWorkTracking);
         if (storedTasks) {
           const parsedTasks = JSON.parse(storedTasks);
@@ -629,6 +655,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         if (storedFocusTimer) cachedFocusTimer = normalizeFocusTimer(JSON.parse(storedFocusTimer));
         if (storedFocusHistory) cachedFocusHistory = normalizeFocusHistory(JSON.parse(storedFocusHistory));
         if (storedWorkTracking) cachedWorkTracking = normalizeWorkTracking(JSON.parse(storedWorkTracking));
+        if (storedKanbanColumns) cachedKanbanColumns = normalizeKanbanColumns(JSON.parse(storedKanbanColumns));
         if (legacyProjects) {
           const parsedLegacyProjects = JSON.parse(legacyProjects);
           if (Array.isArray(parsedLegacyProjects)) legacyProjectsBackup = parsedLegacyProjects;
@@ -648,6 +675,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       let nextFocusTimer = cachedFocusTimer;
       let nextFocusHistory = cachedFocusHistory;
       let nextWorkTracking = cachedWorkTracking;
+      let nextKanbanColumns = cachedKanbanColumns;
       let status: SyncStatus = "offline";
       let recoveredLegacyWorkspace = false;
       let migratedTenHourSchedule = false;
@@ -665,9 +693,10 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           nextFocusTimer = normalizeFocusTimer(workspace.focusTimer);
           nextFocusHistory = normalizeFocusHistory(workspace.focusHistory);
           nextWorkTracking = normalizeWorkTracking(workspace.workTracking);
+          nextKanbanColumns = normalizeKanbanColumns(workspace.kanbanColumns);
           serverRevision.current = workspace.revision;
         } else if (hasCachedWorkspace) {
-          const saved = await saveWorkspace(nextTasks, nextProjects, nextGoals, nextSchedule, nextFocusTimer, nextFocusHistory, nextWorkTracking);
+          const saved = await saveWorkspace(nextTasks, nextProjects, nextGoals, nextSchedule, nextFocusTimer, nextFocusHistory, nextWorkTracking, nextKanbanColumns);
           serverRevision.current = saved.workspace?.revision ?? 0;
         }
 
@@ -685,7 +714,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           nextTasks = recoveredTasks;
           nextProjects = recoveredProjects;
           if (recoveredLegacyWorkspace) {
-            const saved = await saveWorkspace(nextTasks, nextProjects, nextGoals, nextSchedule, nextFocusTimer, nextFocusHistory, nextWorkTracking);
+            const saved = await saveWorkspace(nextTasks, nextProjects, nextGoals, nextSchedule, nextFocusTimer, nextFocusHistory, nextWorkTracking, nextKanbanColumns);
             serverRevision.current = saved.workspace?.revision ?? serverRevision.current;
           }
           window.localStorage.setItem(recoveryKey, "complete");
@@ -703,12 +732,13 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       setFocusTimer(nextFocusTimer);
       setFocusHistory(nextFocusHistory);
       setWorkTracking(nextWorkTracking);
+      setKanbanColumns(nextKanbanColumns);
       if (recoveredLegacyWorkspace) {
         setToast("Recovered your earlier local tasks and projects, including completion status.");
       }
       setFocusTask((current) => nextTasks.find((task) => task.id === nextFocusTimer.taskId && !task.completed) ?? nextTasks.find((task) => task.id === current?.id && !task.completed) ?? nextTasks.find((task) => !task.completed) ?? null);
       lastSyncedPayload.current = status === "synced" && !migratedTenHourSchedule
-        ? JSON.stringify({ tasks: nextTasks, projects: nextProjects, goals: nextGoals, schedule: nextSchedule, focusTimer: nextFocusTimer, focusHistory: nextFocusHistory, workTracking: nextWorkTracking })
+        ? JSON.stringify({ tasks: nextTasks, projects: nextProjects, goals: nextGoals, schedule: nextSchedule, focusTimer: nextFocusTimer, focusHistory: nextFocusHistory, workTracking: nextWorkTracking, kanbanColumns: nextKanbanColumns })
         : "";
       try {
         window.localStorage.setItem(taskKey, JSON.stringify(nextTasks));
@@ -718,6 +748,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         window.localStorage.setItem(focusTimerKey, JSON.stringify(nextFocusTimer));
         window.localStorage.setItem(focusHistoryKey, JSON.stringify(nextFocusHistory));
         window.localStorage.setItem(workTrackingKey, JSON.stringify(nextWorkTracking));
+        window.localStorage.setItem(kanbanColumnsKey, JSON.stringify(nextKanbanColumns));
       } catch {
         // The server copy remains authoritative when browser storage is unavailable.
       }
@@ -743,7 +774,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
 
   useEffect(() => {
     if (!hydrated.current || !sessionUser) return;
-    const payload = JSON.stringify({ tasks, projects, goals, schedule: todaySchedule, focusTimer, focusHistory, workTracking });
+    const payload = JSON.stringify({ tasks, projects, goals, schedule: todaySchedule, focusTimer, focusHistory, workTracking, kanbanColumns });
     try {
       window.localStorage.setItem(accountStorageKey("tasks", sessionUser.id), JSON.stringify(tasks));
       window.localStorage.setItem(accountStorageKey("projects", sessionUser.id), JSON.stringify(projects));
@@ -752,6 +783,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       window.localStorage.setItem(accountStorageKey("focus-timer", sessionUser.id), JSON.stringify(focusTimer));
       window.localStorage.setItem(accountStorageKey("focus-history", sessionUser.id), JSON.stringify(focusHistory));
       window.localStorage.setItem(accountStorageKey("work-tracking", sessionUser.id), JSON.stringify(workTracking));
+      window.localStorage.setItem(accountStorageKey("kanban-columns", sessionUser.id), JSON.stringify(kanbanColumns));
     } catch {
       // Continue with cloud sync even if the local cache is unavailable.
     }
@@ -785,7 +817,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [focusHistory, focusTimer, goals, projects, sessionUser, syncRetry, tasks, todaySchedule, workTracking]);
+  }, [focusHistory, focusTimer, goals, projects, sessionUser, syncRetry, tasks, todaySchedule, workTracking, kanbanColumns]);
 
   useEffect(() => {
     if (!sessionUser) return;
@@ -887,6 +919,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           focusTimer: normalizeFocusTimer(workspace.focusTimer),
           focusHistory: normalizeFocusHistory(workspace.focusHistory),
           workTracking: normalizeWorkTracking(workspace.workTracking),
+          kanbanColumns: normalizeKanbanColumns(workspace.kanbanColumns),
         };
         serverRevision.current = workspace.revision;
         lastSyncedPayload.current = JSON.stringify(remote);
@@ -897,6 +930,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         setFocusTimer(remote.focusTimer);
         setFocusHistory(remote.focusHistory);
         setWorkTracking(remote.workTracking);
+        setKanbanColumns(remote.kanbanColumns);
         setFocusTask((current) => remote.tasks.find((task) => task.id === remote.focusTimer.taskId && !task.completed) ?? remote.tasks.find((task) => task.id === current?.id && !task.completed) ?? remote.tasks.find((task) => !task.completed) ?? null);
         setSyncStatus("synced");
       } catch {
@@ -1343,6 +1377,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         ...task,
         completed: completing,
         status: completing ? "done" as TaskStatus : "todo" as TaskStatus,
+        kanbanColumnId: undefined,
         completedAt: completing ? new Date().toISOString() : undefined,
       } : task);
       if (!completing || !target.recurrence || target.recurrence === "none") return updated;
@@ -1353,6 +1388,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         status: "todo",
         completed: false,
         completedAt: undefined,
+        kanbanColumnId: undefined,
         createdAt: new Date().toISOString(),
         subtasks: (target.subtasks ?? []).map((subtask) => ({ ...subtask, id: Date.now() + subtask.id, completed: false })),
       };
@@ -1377,10 +1413,39 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     setTasks((current) => current.map((task) => task.id === id ? {
       ...task,
       status,
+      kanbanColumnId: undefined,
       completed: status === "done",
       completedAt: status === "done" ? task.completedAt ?? new Date().toISOString() : undefined,
     } : task));
     setToast(`Task moved to ${status === "in-progress" ? "In progress" : status === "done" ? "Done" : "To do"}`);
+  }
+
+  function moveKanbanTask(id: number, columnId: string) {
+    const column = kanbanColumns.find(item => item.id === columnId);
+    if (!column) return;
+    setTasks(current => transitionKanbanTask(current, id, column));
+    setToast(`Task moved to ${column.title}`);
+  }
+
+  function updateKanbanColumns(next: KanbanColumn[], transferTo?: string) {
+    setTasks(current => {
+      // Pin implicit placements before reordering so notes stay in their columns.
+      let updated: Task[] = current.map(task => ({ ...task, kanbanColumnId: taskColumnId(task, kanbanColumns) }));
+      for (const task of current) {
+        const previous = kanbanColumns.find(c => c.id === taskColumnId(task, kanbanColumns));
+        const destination = next.find(c => c.id === previous?.id) ?? next.find(c => c.id === transferTo) ?? next[0];
+        if (!next.some(c => c.id === previous?.id) || destination.status !== previous?.status) {
+          updated = transitionKanbanTask(updated, task.id, destination);
+        }
+      }
+      return updated;
+    });
+    setKanbanColumns(next);
+    setToast("Kanban columns updated");
+  }
+
+  function updateTaskAttachments(id: number, attachments: TaskAttachment[]) {
+    setTasks(current => current.map(task => task.id === id ? { ...task, attachments } : task));
   }
 
   function updateTodaySchedule(schedule: ScheduleWindow) {
@@ -1642,7 +1707,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             />
           )}
           {activeView === "board" && <BoardView tasks={visibleTasks} onAdd={openNewTask} onMove={moveTask} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
-          {activeView === "kanban" && <KanbanView tasks={visibleTasks} onAdd={openNewTask} onMove={moveTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "kanban" && <KanbanView tasks={visibleTasks} allTasks={tasks} columns={kanbanColumns} onColumnsChange={updateKanbanColumns} onAdd={openNewTask} onMove={moveKanbanTask} onEdit={openEditTask} onFocus={openFocus} onAttachmentsChange={updateTaskAttachments} />}
           {activeView === "upcoming" && <UpcomingView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "planner" && <PlannerView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "mindMap" && <MindMapView goals={goals} tasks={tasks} onEditTask={openEditTaskById} onCreateGoal={openNewGoal} />}

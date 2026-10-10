@@ -8,6 +8,7 @@ import {
 } from "./focus-timer";
 import { normalizeWorkTracking, type WorkTrackingState } from "./work-tracking";
 import { normalizeGoals, type Goal } from "./goals";
+import { DEFAULT_KANBAN_COLUMNS, normalizeKanbanColumns, type KanbanColumn } from "./kanban";
 
 export type ScheduleWindow = {
   startTime: string;
@@ -25,6 +26,7 @@ export type OrbitWorkspace = {
   focusTimer: FocusTimerState;
   focusHistory: FocusHistoryEntry[];
   workTracking: WorkTrackingState;
+  kanbanColumns: KanbanColumn[];
   revision: number;
   updatedAt: string;
 };
@@ -37,6 +39,7 @@ type WorkspaceRow = {
   focus_timer: unknown;
   focus_history: unknown;
   work_tracking: unknown;
+  kanban_columns: unknown;
   revision: string | number;
   updated_at: Date | string;
 };
@@ -62,6 +65,7 @@ export function normalizeScheduleWindow(value: unknown): ScheduleWindow | null {
 }
 
 async function ensureWorkspaceColumns(sql: ReturnType<typeof database>) {
+  await sql`ALTER TABLE orbit_workspaces ADD COLUMN IF NOT EXISTS kanban_columns jsonb NOT NULL DEFAULT '[]'::jsonb`;
   await sql`
     ALTER TABLE orbit_workspaces
     ADD COLUMN IF NOT EXISTS goals jsonb NOT NULL
@@ -98,6 +102,7 @@ function toWorkspace(row: WorkspaceRow): OrbitWorkspace {
     focusTimer: normalizeFocusTimer(row.focus_timer),
     focusHistory: normalizeFocusHistory(row.focus_history),
     workTracking: normalizeWorkTracking(row.work_tracking),
+    kanbanColumns: normalizeKanbanColumns(row.kanban_columns),
     revision: Number(row.revision),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -107,7 +112,7 @@ export async function getOrbitWorkspace(userId: string): Promise<OrbitWorkspace 
   const sql = database();
   await ensureWorkspaceColumns(sql);
   const rows = await sql`
-    SELECT tasks, projects, goals, schedule, focus_timer, focus_history, work_tracking, revision, updated_at
+    SELECT tasks, projects, goals, schedule, focus_timer, focus_history, work_tracking, kanban_columns, revision, updated_at
     FROM orbit_workspaces
     WHERE user_id = ${userId}
     LIMIT 1
@@ -124,6 +129,7 @@ export async function saveOrbitWorkspace(
   focusTimer?: FocusTimerState,
   focusHistory?: FocusHistoryEntry[],
   workTracking?: WorkTrackingState,
+  kanbanColumns?: KanbanColumn[],
 ): Promise<OrbitWorkspace> {
   const sql = database();
   await ensureWorkspaceColumns(sql);
@@ -132,6 +138,7 @@ export async function saveOrbitWorkspace(
   const focusTimerJson = focusTimer ? JSON.stringify(focusTimer) : null;
   const focusHistoryJson = focusHistory ? JSON.stringify(focusHistory) : null;
   const workTrackingJson = workTracking ? JSON.stringify(workTracking) : null;
+  const kanbanColumnsJson = kanbanColumns ? JSON.stringify(kanbanColumns) : null;
   try {
     await sql`
       CREATE TABLE IF NOT EXISTS orbit_workspace_history (
@@ -175,8 +182,11 @@ export async function saveOrbitWorkspace(
       DEFAULT '{"workItems":[],"actualEntries":[],"selectedEffortWeeks":[],"timesheetWeek":""}'::jsonb
     `;
     await sql`
-      INSERT INTO orbit_workspace_history (user_id, tasks, projects, goals, schedule, focus_timer, focus_history, work_tracking, revision, workspace_updated_at)
-      SELECT user_id, tasks, projects, goals, schedule, focus_timer, focus_history, work_tracking, revision, updated_at
+      ALTER TABLE orbit_workspace_history ADD COLUMN IF NOT EXISTS kanban_columns jsonb NOT NULL DEFAULT '[]'::jsonb
+    `;
+    await sql`
+      INSERT INTO orbit_workspace_history (user_id, tasks, projects, goals, schedule, focus_timer, focus_history, work_tracking, kanban_columns, revision, workspace_updated_at)
+      SELECT user_id, tasks, projects, goals, schedule, focus_timer, focus_history, work_tracking, kanban_columns, revision, updated_at
       FROM orbit_workspaces
       WHERE user_id = ${userId}
     `;
@@ -184,7 +194,7 @@ export async function saveOrbitWorkspace(
     console.error("Failed to archive Orbit workspace revision", error);
   }
   const rows = await sql`
-    INSERT INTO orbit_workspaces (user_id, tasks, projects, goals, schedule, focus_timer, focus_history, work_tracking)
+    INSERT INTO orbit_workspaces (user_id, tasks, projects, goals, schedule, focus_timer, focus_history, work_tracking, kanban_columns)
     VALUES (
       ${userId},
       ${JSON.stringify(tasks)}::jsonb,
@@ -193,7 +203,8 @@ export async function saveOrbitWorkspace(
       COALESCE(${scheduleJson}::jsonb, '{"startTime":"08:00","endTime":"18:00"}'::jsonb),
       COALESCE(${focusTimerJson}::jsonb, ${JSON.stringify(DEFAULT_FOCUS_TIMER)}::jsonb),
       COALESCE(${focusHistoryJson}::jsonb, '[]'::jsonb),
-      COALESCE(${workTrackingJson}::jsonb, '{"workItems":[],"actualEntries":[],"selectedEffortWeeks":[],"timesheetWeek":""}'::jsonb)
+      COALESCE(${workTrackingJson}::jsonb, '{"workItems":[],"actualEntries":[],"selectedEffortWeeks":[],"timesheetWeek":""}'::jsonb),
+      COALESCE(${kanbanColumnsJson}::jsonb, ${JSON.stringify(DEFAULT_KANBAN_COLUMNS)}::jsonb)
     )
     ON CONFLICT (user_id) DO UPDATE SET
       tasks = EXCLUDED.tasks,
@@ -203,9 +214,10 @@ export async function saveOrbitWorkspace(
       focus_timer = COALESCE(${focusTimerJson}::jsonb, orbit_workspaces.focus_timer),
       focus_history = COALESCE(${focusHistoryJson}::jsonb, orbit_workspaces.focus_history),
       work_tracking = COALESCE(${workTrackingJson}::jsonb, orbit_workspaces.work_tracking),
+      kanban_columns = COALESCE(${kanbanColumnsJson}::jsonb, orbit_workspaces.kanban_columns),
       revision = orbit_workspaces.revision + 1,
       updated_at = now()
-    RETURNING tasks, projects, goals, schedule, focus_timer, focus_history, work_tracking, revision, updated_at
+    RETURNING tasks, projects, goals, schedule, focus_timer, focus_history, work_tracking, kanban_columns, revision, updated_at
   ` as WorkspaceRow[];
   if (!rows[0]) throw new Error("Workspace save did not return a row");
   return toWorkspace(rows[0]);

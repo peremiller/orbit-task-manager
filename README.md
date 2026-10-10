@@ -9,6 +9,11 @@ A calm, modern task management experience for clear priorities, focused work, an
 - Real-time Mind Map and weighted Word Map views of every open task, grouped by goal
 - Task creation, editing, deletion, search, filtering, and completion
 - Drag-and-drop workflow board
+- Sticky-note Kanban at `/kanban` with up to 30 editable columns: names, descriptions, colors, and To do / In progress / Done behavior
+- Drag column grips to reorder, or use each column’s left/right buttons; column settings and task placements sync with the account workspace
+- Delete columns by moving their tasks to a selected destination, including tasks hidden by filters; keep at least one column
+- Add images and files with each note’s paperclip button; file picker, drag-and-drop, and pasted images are supported (20 files per task, 3 MB per file)
+- Private attachment storage in the existing Postgres database, authenticated previews/downloads, and image thumbnails on notes
 - Todoist-style quick capture with dates, times, priorities, labels, estimates, recurrence, and project tokens
 - Recurring tasks that create the next occurrence automatically
 - Subtasks with completion progress and workspace-wide labels
@@ -36,6 +41,8 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
+
+Kanban columns are retained in `orbit_workspaces.kanban_columns` and workspace history. The additive schema migrations run through the existing database initialization. Attachment bytes live in `orbit_task_attachments`; task records contain only small attachment references. Removing an attachment from a task retains the stored file for recurring copies and archived workspace references.
 
 ## Validation
 
