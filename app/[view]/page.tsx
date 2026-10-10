@@ -10,6 +10,7 @@ const ROUTE_VIEWS: Record<string, View> = {
   "mind-map": "mindMap",
   goals: "goals",
   board: "board",
+  kanban: "kanban",
   "filters-labels": "filtersLabels",
   projects: "projects",
   insights: "analytics",

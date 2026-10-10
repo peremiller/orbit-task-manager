@@ -65,15 +65,16 @@ import { createDefaultWorkTrackingState, normalizeWorkTracking, type WorkTrackin
 import { GOAL_COLORS, normalizeGoals, uniqueGoalId, type Goal } from "@/lib/goals";
 import { ActualsView, EffortPlanView, SelectionManagerView, TimesheetReportView, WorkDashboardView } from "./work-tracking-views";
 import { GoalsView, MindMapView } from "./goal-views";
+import { KanbanView } from "./kanban-view";
 
 type Priority = "Very High" | "High" | "Medium" | "Low";
-type TaskStatus = "todo" | "in-progress" | "done";
+export type TaskStatus = "todo" | "in-progress" | "done";
 type StatusFilter = "All" | TaskStatus;
 type Recurrence = "none" | "daily" | "weekdays" | "weekly" | "monthly";
 type Subtask = { id: number; title: string; completed: boolean };
-export type View = "today" | "inbox" | "upcoming" | "planner" | "mindMap" | "goals" | "board" | "filtersLabels" | "projects" | "analytics" | "timerHistory" | "completed" | "actuals" | "effortPlan" | "timesheetReport" | "workDashboard" | "selectionManager";
+export type View = "today" | "inbox" | "upcoming" | "planner" | "mindMap" | "goals" | "board" | "kanban" | "filtersLabels" | "projects" | "analytics" | "timerHistory" | "completed" | "actuals" | "effortPlan" | "timesheetReport" | "workDashboard" | "selectionManager";
 
-type Task = {
+export type Task = {
   id: number;
   title: string;
   project: string;
@@ -166,6 +167,7 @@ const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: s
   mindMap: { eyebrow: "See the whole orbit", title: "Mind Map", description: "A live, interactive 3D view of every task, branching from the goals it supports." },
   goals: { eyebrow: "Outcomes before activity", title: "Goals", description: "Connect daily work to the outcomes you want to achieve." },
   board: { eyebrow: "Flow of work", title: "Board", description: "Move tasks from intention to done." },
+  kanban: { eyebrow: "A little paper. A lot of progress.", title: "Kanban", description: "Put your ideas on the wall and move them forward, one sticky note at a time." },
   filtersLabels: { eyebrow: "Your command center", title: "Filters & labels", description: "Find the right work instantly with smart views and reusable labels." },
   projects: { eyebrow: "Work with a purpose", title: "Projects", description: "Every active outcome, in one clear place." },
   analytics: { eyebrow: "Your momentum", title: "Insights", description: "See how focus compounds over time." },
@@ -186,6 +188,7 @@ const VIEW_PATHS: Record<View, string> = {
   mindMap: "/mind-map",
   goals: "/goals",
   board: "/board",
+  kanban: "/kanban",
   filtersLabels: "/filters-labels",
   projects: "/projects",
   analytics: "/insights",
@@ -1365,7 +1368,19 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   }
 
   function moveTask(id: number, status: TaskStatus) {
-    setTasks((current) => current.map((task) => task.id === id ? { ...task, status, completed: status === "done" } : task));
+    const target = tasks.find((task) => task.id === id);
+    if (!target || target.status === status) return;
+    if (status === "done" && !target.completed) {
+      toggleTask(id);
+      return;
+    }
+    setTasks((current) => current.map((task) => task.id === id ? {
+      ...task,
+      status,
+      completed: status === "done",
+      completedAt: status === "done" ? task.completedAt ?? new Date().toISOString() : undefined,
+    } : task));
+    setToast(`Task moved to ${status === "in-progress" ? "In progress" : status === "done" ? "Done" : "To do"}`);
   }
 
   function updateTodaySchedule(schedule: ScheduleWindow) {
@@ -1459,6 +1474,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     { view: "workDashboard", label: "Dashboard", icon: TrendingUp },
     { view: "selectionManager", label: "Selection Manager", icon: Settings },
     { view: "board", label: "Board", icon: KanbanSquare },
+    { view: "kanban", label: "Kanban", icon: KanbanSquare },
     { view: "filtersLabels", label: "Filters & Labels", icon: ListFilter },
     { view: "analytics", label: "Insights", icon: BarChart3 },
     { view: "timerHistory", label: "Timer History", icon: Clock3, count: focusHistory.length },
@@ -1626,6 +1642,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             />
           )}
           {activeView === "board" && <BoardView tasks={visibleTasks} onAdd={openNewTask} onMove={moveTask} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "kanban" && <KanbanView tasks={visibleTasks} onAdd={openNewTask} onMove={moveTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "upcoming" && <UpcomingView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "planner" && <PlannerView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "mindMap" && <MindMapView goals={goals} tasks={tasks} onEditTask={openEditTaskById} onCreateGoal={openNewGoal} />}
