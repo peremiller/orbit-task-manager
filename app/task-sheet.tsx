@@ -3,6 +3,7 @@
 import { CheckCircle2, Clock3, CalendarDays, Pencil, Plus, Target } from "lucide-react";
 import { Fragment, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import type { Task, TaskStatus } from "./page";
+import { isActionableTask, TASK_STATUS_LABELS } from "@/lib/task-status";
 
 export type TaskCellPatch = Partial<Pick<Task, "title" | "project" | "notes">>;
 
@@ -78,13 +79,13 @@ export function TaskSheet({ tasks, projects, title, groupByDue = false, planner 
   const dueDates = Array.from(new Set(tasks.map(task => task.due)));
   const days = [...DUE_ORDER.filter(day => dueDates.includes(day)), ...dueDates.filter(day => !DUE_ORDER.includes(day)).sort()];
   const groups = groupByDue ? days.map(day => ({ name: day, tasks: tasks.filter(task => task.due === day) })) : [{ name: "", tasks }];
-  const minutes = tasks.reduce((total, task) => total + task.duration, 0);
-  const overloaded = days.filter(day => tasks.filter(task => task.due === day).reduce((total, task) => total + task.duration, 0) > 480).length;
+  const minutes = tasks.filter(isActionableTask).reduce((total, task) => total + task.duration, 0);
+  const overloaded = days.filter(day => tasks.filter(task => task.due === day && isActionableTask(task)).reduce((total, task) => total + task.duration, 0) > 480).length;
 
   return <div className="task-sheet-view">
     {planner && <section className="planner-summary" aria-label="Planner capacity summary">
       <article><span className="stat-icon blue"><Clock3 size={20} /></span><div><strong>{duration(minutes)}</strong><small>Planned effort</small></div></article>
-      <article><span className="stat-icon lime"><CalendarDays size={20} /></span><div><strong>{days.length}</strong><small>Active time buckets</small></div></article>
+      <article><span className="stat-icon lime"><CalendarDays size={20} /></span><div><strong>{days.filter(day => tasks.some(task => task.due === day && isActionableTask(task))).length}</strong><small>Active time buckets</small></div></article>
       <article><span className="stat-icon blue"><Target size={20} /></span><div><strong>{overloaded}</strong><small>Over-capacity days</small></div></article>
     </section>}
     <section className="task-sheet" aria-label={title}>
@@ -95,7 +96,7 @@ export function TaskSheet({ tasks, projects, title, groupByDue = false, planner 
           <colgroup><col className="sheet-workstream-col" /><col className="sheet-task-col" /><col className="sheet-status-col" /><col className="sheet-date-col" /><col className="sheet-remarks-col" /></colgroup>
           <thead><tr><th scope="col">Workstream</th><th scope="col">Task</th><th scope="col">Status</th><th scope="col">Date Completed</th><th scope="col">Remarks</th></tr></thead>
           <tbody>{groups.map(group => <Fragment key={group.name}>
-            {groupByDue && <tr className="sheet-group-row"><th scope="rowgroup" colSpan={5}><span>{group.name}</span><small>{group.tasks.length} {group.tasks.length === 1 ? "task" : "tasks"}{planner ? ` · ${duration(group.tasks.reduce((total, task) => total + task.duration, 0))} planned · 8h daily guide` : ""}</small></th></tr>}
+            {groupByDue && <tr className="sheet-group-row"><th scope="rowgroup" colSpan={5}><span>{group.name}</span><small>{group.tasks.length} {group.tasks.length === 1 ? "task" : "tasks"}{planner ? ` · ${duration(group.tasks.filter(isActionableTask).reduce((total, task) => total + task.duration, 0))} planned · 8h daily guide` : ""}</small></th></tr>}
             {group.tasks.map(task => {
               const status = task.completed ? "done" : task.status;
               return <tr key={task.id} data-task-id={task.id}>
@@ -104,7 +105,7 @@ export function TaskSheet({ tasks, projects, title, groupByDue = false, planner 
                   {projects.map(project => <option key={project.name} value={project.name}>{project.name}</option>)}
                 </select></td>
                 <td><div className="sheet-task-cell"><EditableCell value={task.title} required label={`Task name for ${task.title}`} onSave={value => onCellChange(task.id, { title: value })} /><button type="button" className="sheet-task-edit" aria-label={`Open details for ${task.title}`} title="Open task details" onClick={() => onEdit(task)}><Pencil size={14} /></button></div></td>
-                <td><div className={`sheet-status-pill sheet-status-${status}`}><select aria-label={`Status for ${task.title}`} value={status} onChange={event => onStatusChange(task.id, event.target.value as TaskStatus)}><option value="todo">Not Started</option><option value="in-progress">In Progress</option><option value="done">Complete</option></select><span aria-hidden="true" /></div></td>
+                <td><div className={`sheet-status-pill sheet-status-${status}`}><select aria-label={`Status for ${task.title}`} value={status} onChange={event => onStatusChange(task.id, event.target.value as TaskStatus)}>{Object.entries(TASK_STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><span aria-hidden="true" /></div></td>
                 <td className="sheet-completed-date">{task.completed && task.completedAt && !Number.isNaN(Date.parse(task.completedAt)) ? <time dateTime={task.completedAt}>{completionDate(task.completedAt)}</time> : <span aria-label="No completion date">—</span>}</td>
                 <td><EditableCell value={task.notes} multiline label={`Remarks for ${task.title}`} onSave={value => onCellChange(task.id, { notes: value })} /></td>
               </tr>;
@@ -113,7 +114,7 @@ export function TaskSheet({ tasks, projects, title, groupByDue = false, planner 
         </table>
         {!tasks.length && <div className="empty-list"><CheckCircle2 size={30} /><h3>No tasks to show</h3><p>{empty}</p><button type="button" className="secondary-button" onClick={onAdd}><Plus size={15} />Add task</button></div>}
       </div>
-      <p className="task-sheet-footer">Changes save automatically. Completing a task records its date and moves it to Completed.</p>
+      <p className="task-sheet-footer">Changes save automatically. Complete records a completion date. N/A keeps the task in Inbox and excludes it from planned work and completion percentages.</p>
     </section>
   </div>;
 }

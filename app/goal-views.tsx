@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { ArrowRight, CalendarDays, CheckCircle2, CircleDot, Edit3, Minus, Network, Pause, Play, Plus, RotateCcw, Sparkles, Target, Trash2 } from "lucide-react";
+import { isActionableTask, type TaskStatus } from "@/lib/task-status";
 import type { Goal } from "@/lib/goals";
 
 type GoalTask = {
@@ -11,7 +12,7 @@ type GoalTask = {
   due: string;
   duration: number;
   priority: "Very High" | "High" | "Medium" | "Low";
-  status?: "todo" | "in-progress" | "done";
+  status?: TaskStatus;
   completed: boolean;
   goalId?: string;
 };
@@ -29,7 +30,7 @@ type UniverseNode = {
   goalId?: string;
   project?: string;
   priority?: GoalTask["priority"];
-  status?: "todo" | "in-progress" | "done";
+  status?: TaskStatus;
   taskCount?: number;
 };
 
@@ -40,7 +41,8 @@ type UniverseScene = { nodes: UniverseNode[]; edges: UniverseEdge[]; branchCount
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const UNALIGNED_COLOR = "#7b8494";
 
-function taskStatus(task: GoalTask): "todo" | "in-progress" | "done" {
+function taskStatus(task: GoalTask): TaskStatus {
+  if (task.status === "na") return "na";
   if (task.completed || task.status === "done") return "done";
   return task.status === "in-progress" ? "in-progress" : "todo";
 }
@@ -133,9 +135,10 @@ export function GoalsView({ goals, tasks, onCreateGoal, onEditGoal, onDeleteGoal
   onAddTask: (goalId: string) => void;
   onEditTask: (taskId: number) => void;
 }) {
-  const alignedTasks = tasks.filter((task) => task.goalId && goals.some((goal) => goal.id === task.goalId));
+  const alignedTasks = tasks.filter((task) => task.status !== "na" && task.goalId && goals.some((goal) => goal.id === task.goalId));
   const completedAligned = alignedTasks.filter((task) => task.completed).length;
-  const alignment = tasks.length ? Math.round((alignedTasks.length / tasks.length) * 100) : 0;
+  const applicableCount = tasks.filter(task => task.status !== "na").length;
+  const alignment = applicableCount ? Math.round((alignedTasks.length / applicableCount) * 100) : 0;
 
   return (
     <div className="goals-view">
@@ -148,7 +151,7 @@ export function GoalsView({ goals, tasks, onCreateGoal, onEditGoal, onDeleteGoal
       {goals.length ? (
         <section className="goal-card-grid" aria-label="Your goals">
           {goals.map((goal) => {
-            const goalTasks = tasks.filter((task) => task.goalId === goal.id);
+            const goalTasks = tasks.filter((task) => task.goalId === goal.id && task.status !== "na");
             const completed = goalTasks.filter((task) => task.completed).length;
             const progress = goalTasks.length ? Math.round((completed / goalTasks.length) * 100) : 0;
             const openTasks = goalTasks.filter((task) => !task.completed);
@@ -194,10 +197,10 @@ export function GoalsView({ goals, tasks, onCreateGoal, onEditGoal, onDeleteGoal
         </section>
       )}
 
-      {goals.length > 0 && tasks.length > alignedTasks.length && (
+      {goals.length > 0 && applicableCount > alignedTasks.length && (
         <section className="unaligned-callout">
           <span><Sparkles size={20} /></span>
-          <div><strong>{tasks.length - alignedTasks.length} tasks are not aligned yet</strong><p>Edit a task and choose a goal to make your plan more intentional.</p></div>
+          <div><strong>{applicableCount - alignedTasks.length} tasks are not aligned yet</strong><p>Edit a task and choose a goal to make your plan more intentional.</p></div>
         </section>
       )}
     </div>
@@ -226,7 +229,7 @@ export function MindMapView({ goals, tasks, onEditTask, onCreateGoal }: {
   const selectedGoal = selectedNode?.goalId ? goalById.get(selectedNode.goalId) : undefined;
   const completedCount = tasks.filter((task) => taskStatus(task) === "done").length;
   const inProgressCount = tasks.filter((task) => taskStatus(task) === "in-progress").length;
-  const openCount = tasks.length - completedCount;
+  const openCount = tasks.filter(isActionableTask).length;
   const sortedTasks = useMemo(() => [...tasks].sort((a, b) => Number(a.completed) - Number(b.completed) || a.title.localeCompare(b.title)), [tasks]);
 
   useEffect(() => {
@@ -517,7 +520,7 @@ export function MindMapView({ goals, tasks, onEditTask, onCreateGoal }: {
   }
 
   const selectedStatus = selectedTask ? taskStatus(selectedTask) : undefined;
-  const selectedStatusLabel = selectedStatus === "done" ? "Completed" : selectedStatus === "in-progress" ? "In progress" : "To do";
+  const selectedStatusLabel = selectedStatus === "na" ? "N/A" : selectedStatus === "done" ? "Completed" : selectedStatus === "in-progress" ? "In progress" : "To do";
 
   return (
     <section className="mindmap-panel task-universe-panel">
@@ -563,7 +566,7 @@ export function MindMapView({ goals, tasks, onEditTask, onCreateGoal }: {
       </div>
 
       <div className="task-universe-footer">
-        <label className="task-universe-jump"><span>Find any task</span><select value={selectedTask?.id ?? ""} onChange={(event) => setSelectedNodeId(event.target.value ? `task-${event.target.value}` : "root")}><option value="">All tasks</option>{sortedTasks.map((task) => <option key={task.id} value={task.id}>{task.completed ? "✓ " : ""}{task.title}</option>)}</select></label>
+        <label className="task-universe-jump"><span>Find any task</span><select value={selectedTask?.id ?? ""} onChange={(event) => setSelectedNodeId(event.target.value ? `task-${event.target.value}` : "root")}><option value="">All tasks</option>{sortedTasks.map((task) => <option key={task.id} value={task.id}>{task.status === "na" ? "N/A · " : task.completed ? "✓ " : ""}{task.title}</option>)}</select></label>
         <div className="task-universe-detail" aria-live="polite">
           <span className={`universe-detail-mark ${selectedNode?.kind ?? "root"}`} style={{ "--node-color": selectedNode?.kind === "root" ? "var(--blue)" : selectedNode?.color ?? "var(--blue)" } as CSSProperties}>{selectedNode?.kind === "task" ? <CircleDot size={17} /> : selectedNode?.kind === "goal" ? <Target size={17} /> : <Network size={17} />}</span>
           <div>

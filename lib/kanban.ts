@@ -1,15 +1,16 @@
-export type KanbanStatus = "todo" | "in-progress" | "done";
+export type KanbanStatus = "todo" | "in-progress" | "done" | "na";
 export type KanbanColumn = { id: string; title: string; description: string; color: string; status: KanbanStatus };
 
 export const DEFAULT_KANBAN_COLUMNS: KanbanColumn[] = [
   { id: "todo", title: "To do", description: "Ideas ready for their moment", color: "#c38c13", status: "todo" },
   { id: "in-progress", title: "In progress", description: "A little closer every day", color: "#3564c5", status: "in-progress" },
   { id: "done", title: "Done", description: "Small wins, real momentum", color: "#208062", status: "done" },
+  { id: "na", title: "N/A", description: "Kept for reference, outside planned work", color: "#737985", status: "na" },
 ];
-export const KANBAN_STATUS_LABELS = { todo: "To do", "in-progress": "In progress", done: "Done" };
+export const KANBAN_STATUS_LABELS = { todo: "To do", "in-progress": "In progress", done: "Done", na: "N/A" };
 
 export function parseKanbanColumns(value: unknown): KanbanColumn[] | null {
-  if (!Array.isArray(value) || !value.length || value.length > 30) return null;
+  if (!Array.isArray(value) || !value.length || value.length > 31) return null;
   const ids = new Set<string>();
   const columns: KanbanColumn[] = [];
   for (const item of value) {
@@ -19,15 +20,21 @@ export function parseKanbanColumns(value: unknown): KanbanColumn[] | null {
       || typeof c.title !== "string" || !c.title.trim() || c.title.trim().length > 80
       || typeof c.description !== "string" || c.description.length > 300
       || typeof c.color !== "string" || !/^#[a-fA-F0-9]{6}$/.test(c.color)
-      || !["todo", "in-progress", "done"].includes(c.status ?? "")) return null;
+      || !["todo", "in-progress", "done", "na"].includes(c.status ?? "")) return null;
     ids.add(c.id);
     columns.push({ id: c.id, title: c.title.trim(), description: c.description.trim(), color: c.color, status: c.status as KanbanStatus });
   }
-  return columns;
+  return columns.length === 31 && !columns.some(c => c.status === "na") ? null : columns;
 }
 
 export function normalizeKanbanColumns(value: unknown): KanbanColumn[] {
-  return parseKanbanColumns(value) ?? DEFAULT_KANBAN_COLUMNS.map(c => ({ ...c }));
+  const columns = parseKanbanColumns(value) ?? DEFAULT_KANBAN_COLUMNS.map(c => ({ ...c }));
+  if (!columns.some(c => c.status === "na")) {
+    let id = "na";
+    while (columns.some(c => c.id === id)) id += "-";
+    columns.push({ ...DEFAULT_KANBAN_COLUMNS[3], id });
+  }
+  return columns;
 }
 
 export function taskColumnId(task: { status: KanbanStatus; completed: boolean; kanbanColumnId?: string }, columns: KanbanColumn[]): string {

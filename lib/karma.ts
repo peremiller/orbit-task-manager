@@ -1,4 +1,4 @@
-export type KarmaTask = { completed: boolean; completedAt?: string | null };
+export type KarmaTask = { status?: string; completed: boolean; completedAt?: string | null };
 
 export type KarmaDay = {
   label: string;
@@ -66,7 +66,7 @@ export function computeKarma(tasks: KarmaTask[], dailyGoal: number, now?: Date):
   const dayCounts = new Map<string, number>();
   let totalCompleted = 0;
   for (const task of tasks) {
-    if (!task.completed && !task.completedAt) continue;
+    if (task.status === "na" || (!task.completed && !task.completedAt)) continue;
     totalCompleted += 1;
     if (!task.completedAt) continue;
     const done = new Date(task.completedAt);

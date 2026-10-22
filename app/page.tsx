@@ -72,13 +72,14 @@ import { GoalsView, MindMapView } from "./goal-views";
 import { KanbanView } from "./kanban-view";
 import { DEFAULT_KANBAN_COLUMNS, normalizeKanbanColumns, taskColumnId, type KanbanColumn } from "@/lib/kanban";
 import type { TaskAttachment } from "@/lib/task-attachments";
+import { changeTaskStatus, isActionableTask, TASK_STATUS_LABELS, type TaskStatus } from "@/lib/task-status";
 import { TaskSheet, type TaskCellPatch } from "./task-sheet";
 import { BackToTop } from "./back-to-top";
 
 const ProjectProgressView = dynamic(() => import("./project-progress-view").then((module) => module.ProjectProgressView), { loading: () => <p role="status">Loading project progress…</p> });
 
 type Priority = "Very High" | "High" | "Medium" | "Low";
-export type TaskStatus = "todo" | "in-progress" | "done";
+export type { TaskStatus } from "@/lib/task-status";
 type StatusFilter = "All" | TaskStatus;
 type Recurrence = "none" | "daily" | "weekdays" | "weekly" | "monthly";
 type Subtask = { id: number; title: string; completed: boolean };
@@ -216,6 +217,7 @@ const emptyDraft = {
   time: "9:00 AM",
   duration: 30,
   priority: "Medium" as Priority,
+  status: "todo" as TaskStatus,
   notes: "",
   labels: [] as string[],
   subtasks: [] as Subtask[],
@@ -475,21 +477,16 @@ function userInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "AJ";
 }
 
-function transitionKanbanTask(current: Task[], id: number, column: KanbanColumn): Task[] {
-  const target = current.find(task => task.id === id);
-  if (!target) return current;
+function transitionTaskStatus(current: Task[], id: number, status: TaskStatus, columnId?: string): Task[] {
   const now = new Date().toISOString();
-  const completing = column.status === "done" && !target.completed;
-  const updated = current.map(task => task.id === id ? {
-    ...task, kanbanColumnId: column.id, status: column.status, completed: column.status === "done",
-    completedAt: column.status === "done" ? task.completedAt ?? now : undefined,
-  } : task);
-  if (!completing || !target.recurrence || target.recurrence === "none") return updated;
-  return [{
-    ...target, id: Math.max(Date.now(), ...current.map(task => task.id + 1)), due: nextRecurringDue(target),
-    status: "todo", completed: false, completedAt: undefined, kanbanColumnId: undefined, createdAt: now,
-    subtasks: (target.subtasks ?? []).map(subtask => ({ ...subtask, id: Date.now() + subtask.id, completed: false })),
-  }, ...updated];
+  return changeTaskStatus(current, id, status, { now, columnId, nextOccurrence(target) {
+    if (!target.recurrence || target.recurrence === "none") return null;
+    return {
+      ...target, id: Math.max(Date.now(), ...current.map(task => task.id + 1)), due: nextRecurringDue(target),
+      status: "todo", completed: false, completedAt: undefined, kanbanColumnId: undefined, createdAt: now,
+      subtasks: (target.subtasks ?? []).map(subtask => ({ ...subtask, id: Date.now() + subtask.id, completed: false })),
+    };
+  } });
 }
 
 async function saveWorkspace(tasks: Task[], projects: Project[], goals: Goal[], schedule: ScheduleWindow, focusTimer: FocusTimerState, focusHistory: FocusHistoryEntry[], workTracking: WorkTrackingState, kanbanColumns: KanbanColumn[]) {
@@ -745,7 +742,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       if (recoveredLegacyWorkspace) {
         setToast("Recovered your earlier local tasks and projects, including completion status.");
       }
-      setFocusTask((current) => nextTasks.find((task) => task.id === nextFocusTimer.taskId && !task.completed) ?? nextTasks.find((task) => task.id === current?.id && !task.completed) ?? nextTasks.find((task) => !task.completed) ?? null);
+      setFocusTask((current) => nextTasks.find((task) => task.id === nextFocusTimer.taskId && isActionableTask(task)) ?? nextTasks.find((task) => task.id === current?.id && isActionableTask(task)) ?? nextTasks.find((task) => isActionableTask(task)) ?? null);
       lastSyncedPayload.current = status === "synced" && !migratedTenHourSchedule
         ? JSON.stringify({ tasks: nextTasks, projects: nextProjects, goals: nextGoals, schedule: nextSchedule, focusTimer: nextFocusTimer, focusHistory: nextFocusHistory, workTracking: nextWorkTracking, kanbanColumns: nextKanbanColumns })
         : "";
@@ -940,7 +937,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         setFocusHistory(remote.focusHistory);
         setWorkTracking(remote.workTracking);
         setKanbanColumns(remote.kanbanColumns);
-        setFocusTask((current) => remote.tasks.find((task) => task.id === remote.focusTimer.taskId && !task.completed) ?? remote.tasks.find((task) => task.id === current?.id && !task.completed) ?? remote.tasks.find((task) => !task.completed) ?? null);
+        setFocusTask((current) => remote.tasks.find((task) => task.id === remote.focusTimer.taskId && isActionableTask(task)) ?? remote.tasks.find((task) => task.id === current?.id && isActionableTask(task)) ?? remote.tasks.find((task) => isActionableTask(task)) ?? null);
         setSyncStatus("synced");
       } catch {
         // Local state remains available; the online event will retry later.
@@ -985,7 +982,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           setFocusPickerOpen(false);
           setFocusOpen(true);
         } else {
-          setFocusTask((current) => current && !current.completed && activeTasks.some((task) => task.id === current.id) ? current : activeTasks.find((task) => !task.completed) ?? null);
+          setFocusTask((current) => current && isActionableTask(current) && activeTasks.some((task) => task.id === current.id) ? current : activeTasks.find((task) => isActionableTask(task)) ?? null);
           setFocusOpen(false);
           setFocusPickerOpen(true);
         }
@@ -1050,11 +1047,13 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     return [...knownProjects, ...unmatchedProjects];
   }, [activeView, activeTasks, dueFilter, labelFilter, priorityFilter, projects, search, statusFilter]);
 
-  const openTasks = activeTasks.filter((task) => !task.completed);
+  const inTaskList = (task: Task) => activeView === "completed" ? task.completed : activeView === "inbox" || statusFilter === "na" ? !task.completed : isActionableTask(task);
+  const openTasks = activeTasks.filter((task) => isActionableTask(task));
   const completedCount = tasks.filter((task) => task.completed).length;
-  const filteredOpenTasks = visibleTasks.filter((task) => !task.completed);
+  const filteredOpenTasks = visibleTasks.filter((task) => isActionableTask(task));
   const filteredCompletedCount = visibleTasks.filter((task) => task.completed).length;
-  const filteredProgress = visibleTasks.length ? Math.round((filteredCompletedCount / visibleTasks.length) * 100) : 0;
+  const applicableTasks = visibleTasks.filter(task => task.status !== "na");
+  const filteredProgress = applicableTasks.length ? Math.round((filteredCompletedCount / applicableTasks.length) * 100) : 0;
   const priorities = filteredOpenTasks.filter((task) => task.priority === "Very High" || task.priority === "High");
   const activeProject = projectForId(projects, activeProjectId) ?? null;
   const heading = activeProject
@@ -1069,14 +1068,14 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const viewTaskCount = activeProject
     ? visibleTasks.filter((task) => task.project === activeProject.name).length
     : activeView === "inbox" || activeView === "upcoming" || activeView === "planner"
-        ? visibleTasks.filter((task) => !task.completed).length
+        ? visibleTasks.filter(inTaskList).length
         : activeView === "completed"
           ? visibleTasks.filter((task) => task.completed).length
           : visibleTasks.length;
   const totalViewTaskCount = activeProject
     ? tasks.filter((task) => task.project === activeProject.name).length
     : activeView === "inbox" || activeView === "upcoming" || activeView === "planner"
-        ? taskViewTasks.filter((task) => !task.completed).length
+        ? taskViewTasks.filter(inTaskList).length
         : activeView === "completed"
           ? tasks.filter((task) => task.completed).length
           : taskViewTasks.length;
@@ -1358,7 +1357,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
 
     setProjects(remainingProjects);
     setTasks(remainingTasks);
-    setFocusTask((current) => current?.project === project.name ? remainingTasks.find((task) => !task.completed) ?? null : current);
+    setFocusTask((current) => current?.project === project.name ? remainingTasks.find((task) => isActionableTask(task)) ?? null : current);
     if (projectFilter.includes(project.name)) {
       changeProjectFilter(projectFilter.filter((name) => name !== project.name));
     }
@@ -1403,6 +1402,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       time: task.time,
       duration: task.duration,
       priority: task.priority,
+      status: task.completed ? "done" : task.status,
       notes: task.notes,
       labels: task.labels ?? [],
       subtasks: task.subtasks ?? [],
@@ -1436,12 +1436,15 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       return;
     }
     if (editingTask) {
-      setTasks((current) => current.map((task) => task.id === editingTask.id ? { ...task, ...draft, labels: normalizeLabels(draft.labels), title: draft.title.trim() } : task));
+      setTasks((current) => {
+        const updated = current.map(task => task.id === editingTask.id ? { ...task, ...draft, status: task.status, labels: normalizeLabels(draft.labels), title: draft.title.trim() } : task);
+        return current.find(task => task.id === editingTask.id)?.status === draft.status ? updated : transitionTaskStatus(updated, editingTask.id, draft.status);
+      });
       setToast("Task updated");
     } else {
       const task: Task = { ...draft, labels: normalizeLabels(draft.labels), title: draft.title.trim(), id: Date.now(), status: "todo", completed: false, createdAt: new Date().toISOString() };
-      setTasks((current) => [task, ...current]);
-      setToast("Task added to your day");
+      setTasks((current) => transitionTaskStatus([task, ...current], task.id, draft.status));
+      setToast("Task added");
     }
     setTaskModalOpen(false);
   }
@@ -1449,29 +1452,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   function toggleTask(id: number) {
     const target = tasks.find((task) => task.id === id);
     if (!target) return;
-    const completing = !target.completed;
-    setTasks((current) => {
-      const updated = current.map((task) => task.id === id ? {
-        ...task,
-        completed: completing,
-        status: completing ? "done" as TaskStatus : "todo" as TaskStatus,
-        kanbanColumnId: undefined,
-        completedAt: completing ? new Date().toISOString() : undefined,
-      } : task);
-      if (!completing || !target.recurrence || target.recurrence === "none") return updated;
-      const nextTask: Task = {
-        ...target,
-        id: Date.now(),
-        due: nextRecurringDue(target),
-        status: "todo",
-        completed: false,
-        completedAt: undefined,
-        kanbanColumnId: undefined,
-        createdAt: new Date().toISOString(),
-        subtasks: (target.subtasks ?? []).map((subtask) => ({ ...subtask, id: Date.now() + subtask.id, completed: false })),
-      };
-      return [nextTask, ...updated];
-    });
+    setTasks(current => transitionTaskStatus(current, id, target.completed ? "todo" : "done"));
     setToast(target.completed ? "Task restored" : target.recurrence && target.recurrence !== "none" ? `Complete · next ${recurrenceLabel(target.recurrence).toLowerCase()} occurrence created` : "One step closer. Task complete.");
   }
 
@@ -1484,24 +1465,14 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   function moveTask(id: number, status: TaskStatus) {
     const target = tasks.find((task) => task.id === id);
     if (!target || target.status === status) return;
-    if (status === "done" && !target.completed) {
-      toggleTask(id);
-      return;
-    }
-    setTasks((current) => current.map((task) => task.id === id ? {
-      ...task,
-      status,
-      kanbanColumnId: undefined,
-      completed: status === "done",
-      completedAt: status === "done" ? task.completedAt ?? new Date().toISOString() : undefined,
-    } : task));
-    setToast(`Task moved to ${status === "in-progress" ? "In progress" : status === "done" ? "Done" : "To do"}`);
+    setTasks(current => transitionTaskStatus(current, id, status));
+    setToast(`Task moved to ${TASK_STATUS_LABELS[status]}`);
   }
 
   function moveKanbanTask(id: number, columnId: string) {
     const column = kanbanColumns.find(item => item.id === columnId);
     if (!column) return;
-    setTasks(current => transitionKanbanTask(current, id, column));
+    setTasks(current => transitionTaskStatus(current, id, column.status, column.id));
     setToast(`Task moved to ${column.title}`);
   }
 
@@ -1524,7 +1495,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         const previous = kanbanColumns.find(c => c.id === taskColumnId(task, kanbanColumns));
         const destination = next.find(c => c.id === previous?.id) ?? next.find(c => c.id === transferTo) ?? next[0];
         if (!next.some(c => c.id === previous?.id) || destination.status !== previous?.status) {
-          updated = transitionKanbanTask(updated, task.id, destination);
+          updated = transitionTaskStatus(updated, task.id, destination.status, destination.id);
         }
       }
       return updated;
@@ -1556,6 +1527,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       setToast("Re-enable this project before starting a focus session.");
       return;
     }
+    if (nextTask?.status === "na") { setToast("Restore this task to an active status before starting focus."); return; }
     if (!nextTask) {
       setFocusTask(null);
       setFocusPickerOpen(true);
@@ -1692,7 +1664,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
               <button className={activeProject?.id === project.id ? "project-link active" : "project-link"} key={project.id} onClick={() => navigateProject(project)}>
                 <span className="project-dot" style={{ background: project.color }} />
                 <span>{project.name}</span>
-                <em>{tasks.filter((task) => task.project === project.name && !task.completed).length}</em>
+                <em>{tasks.filter((task) => task.project === project.name && isActionableTask(task)).length}</em>
               </button>
             ))}
           </div>
@@ -1816,18 +1788,18 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             <button type="button" aria-pressed={taskLayout === "original"} onClick={() => setTaskLayout("original")}><LayoutGrid size={16} />{activeView === "upcoming" ? "Timeline" : activeView === "planner" ? "Capacity" : "List"}</button>
           </div>}
           {["inbox", "upcoming", "planner", "completed"].includes(activeView) && taskLayout === "sheet" && <TaskSheet
-            tasks={visibleTasks.filter(task => activeView === "completed" ? task.completed : !task.completed)}
+            tasks={visibleTasks.filter(inTaskList)}
             projects={enabledProjects} title={`${VIEW_TITLES[activeView].title} task sheet`}
             groupByDue={activeView === "upcoming" || activeView === "planner"} planner={activeView === "planner"}
             empty={activeView === "completed" ? "Complete a task and it will appear here, with its completion date." : undefined}
             onAdd={openNewTask} onEdit={openEditTask} onStatusChange={moveTask} onCellChange={updateTaskCell}
           />}
-          {activeView === "upcoming" && taskLayout === "original" && <UpcomingView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
-          {activeView === "planner" && taskLayout === "original" && <PlannerView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "upcoming" && taskLayout === "original" && <UpcomingView tasks={visibleTasks.filter(inTaskList)} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "planner" && taskLayout === "original" && <PlannerView tasks={visibleTasks.filter(inTaskList)} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "mindMap" && <MindMapView goals={goals} tasks={tasks} onEditTask={openEditTaskById} onCreateGoal={openNewGoal} />}
           {activeView === "goals" && <GoalsView goals={goals} tasks={tasks} onCreateGoal={openNewGoal} onEditGoal={openEditGoal} onDeleteGoal={deleteGoal} onAddTask={openNewTaskForGoal} onEditTask={openEditTaskById} />}
           {activeView === "filtersLabels" && <FiltersLabelsView tasks={activeTasks} projects={enabledProjects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
-          {activeView === "inbox" && taskLayout === "original" && <ListView tasks={visibleTasks.filter((task) => !task.completed)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "inbox" && taskLayout === "original" && <ListView tasks={visibleTasks.filter(inTaskList)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "completed" && taskLayout === "original" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
             ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="This project is ready for its first task." />
@@ -1859,6 +1831,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             <div className="form-grid">
               <label className="field-label">Project / Priority<select value={draft.project} onChange={(event) => setDraft({ ...draft, project: event.target.value })}>{projects.filter((project) => !project.disabled || (editingTask && project.name === draft.project)).map((project) => <option key={project.id} value={project.name} disabled={project.disabled}>{project.name}{project.disabled ? " (disabled)" : ""}</option>)}</select></label>
               <label className="field-label">Priority<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Priority })}><option>Very High</option><option>High</option><option>Medium</option><option>Low</option></select></label>
+              <label className="field-label">Status<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as TaskStatus })}>{Object.entries(TASK_STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
               <label className="field-label">Due<select value={draft.due} onChange={(event) => setDraft({ ...draft, due: event.target.value })}><option>Today</option><option>Tomorrow</option><option>Friday</option><option>Monday</option><option>Next week</option><option>Next month</option><option>Someday</option></select></label>
               <label className="field-label">Time<input value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label>
               <label className="field-label">Estimate<select value={draft.duration} onChange={(event) => setDraft({ ...draft, duration: Number(event.target.value) })}><option value={15}>15 minutes</option><option value={30}>30 minutes</option><option value={45}>45 minutes</option><option value={60}>1 hour</option><option value={90}>1.5 hours</option><option value={120}>2 hours</option></select></label>
@@ -2112,6 +2085,7 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, label,
               <option value="todo">To do</option>
               <option value="in-progress">In progress</option>
               <option value="done">Completed</option>
+              <option value="na">N/A</option>
             </select>
           </label>
           <label className="task-filter-control">
@@ -2159,7 +2133,7 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, label,
 }
 
 function TodayView({ tasks, openTasks, priorities, progress, completedCount, schedule, streak, todayCount, dailyGoal, onAdd, onToggle, onEdit, onFocus, onScheduleChange }: { tasks: Task[]; openTasks: Task[]; priorities: Task[]; progress: number; completedCount: number; schedule: ScheduleWindow; streak: number; todayCount: number; dailyGoal: number; onAdd: () => void; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void; onScheduleChange: (schedule: ScheduleWindow) => void }) {
-  const featured = tasks.filter((task) => !task.completed && task.due === "Today").slice(0, 3);
+  const featured = tasks.filter((task) => isActionableTask(task) && task.due === "Today").slice(0, 3);
   const planRef = useRef<HTMLDivElement>(null);
   const [planHighlighted, setPlanHighlighted] = useState(false);
   const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
@@ -2284,6 +2258,7 @@ function BoardView({ tasks, onAdd, onMove, onToggle, onEdit, onFocus }: { tasks:
     { status: "todo", title: "To do", color: "#2457ff" },
     { status: "in-progress", title: "In progress", color: "#c9ff3d" },
     { status: "done", title: "Done", color: "#13a57a" },
+    { status: "na", title: "N/A", color: "#737985" },
   ];
   return (
     <section className="board-grid">
@@ -2298,7 +2273,7 @@ function BoardView({ tasks, onAdd, onMove, onToggle, onEdit, onFocus }: { tasks:
                   <div><span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span><TaskActions task={task} onEdit={onEdit} onFocus={onFocus} /></div>
                   <h3 onClick={() => onEdit(task)}>{task.title}</h3>
                   <p>{task.notes}</p>
-                  <div className="board-task-footer"><span><Folder size={14} />{task.project}</span><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)}>{task.completed && <Check size={13} />}</button></div>
+                  <div className="board-task-footer"><span><Folder size={14} />{task.project}</span><button className={task.completed ? "round-check checked" : "round-check"} disabled={task.status === "na"} aria-label={task.status === "na" ? `N/A: ${task.title}` : `Toggle ${task.title}`} onClick={() => onToggle(task.id)}>{task.status === "na" ? "—" : task.completed && <Check size={13} />}</button></div>
                 </article>
               ))}
               {!columnTasks.length && <div className="board-empty">Drop tasks here</div>}
@@ -2327,17 +2302,17 @@ function PlannerView({ tasks, projects, onToggle, onEdit, onFocus }: { tasks: Ta
   const buckets = [...dueOrder, ...Array.from(new Set(openTasks.map((task) => task.due))).filter((day) => !dueOrder.includes(day))]
     .map((day) => {
       const dayTasks = openTasks.filter((task) => task.due === day);
-      return { day, tasks: dayTasks, minutes: dayTasks.reduce((total, task) => total + task.duration, 0) };
+      return { day, tasks: dayTasks, minutes: dayTasks.filter(isActionableTask).reduce((total, task) => total + task.duration, 0) };
     })
     .filter((bucket) => bucket.tasks.length);
   const overloaded = buckets.filter((bucket) => bucket.minutes > capacity).length;
-  const plannedMinutes = openTasks.reduce((total, task) => total + task.duration, 0);
+  const plannedMinutes = openTasks.filter(isActionableTask).reduce((total, task) => total + task.duration, 0);
 
   return (
     <div className="planner-view">
       <section className="planner-summary">
         <article><span className="stat-icon blue"><Clock3 size={20} /></span><div><strong>{formatDuration(plannedMinutes)}</strong><small>Planned effort</small></div></article>
-        <article><span className="stat-icon lime"><CalendarDays size={20} /></span><div><strong>{buckets.length}</strong><small>Active time buckets</small></div></article>
+        <article><span className="stat-icon lime"><CalendarDays size={20} /></span><div><strong>{buckets.filter(bucket => bucket.tasks.some(isActionableTask)).length}</strong><small>Active time buckets</small></div></article>
         <article><span className="stat-icon blue"><Target size={20} /></span><div><strong>{overloaded}</strong><small>Over-capacity days</small></div></article>
       </section>
       <section className="capacity-board">
@@ -2361,18 +2336,19 @@ function PlannerView({ tasks, projects, onToggle, onEdit, onFocus }: { tasks: Ta
 function FiltersLabelsView({ tasks, projects, onToggle, onEdit, onFocus }: { tasks: Task[]; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
   const [selected, setSelected] = useState("priority");
   const smartFilters = [
-    { id: "priority", name: "Priority radar", description: "Very High and High priority work", test: (task: Task) => !task.completed && (task.priority === "Very High" || task.priority === "High") },
-    { id: "quick", name: "Quick wins", description: "Tasks that need 30 minutes or less", test: (task: Task) => !task.completed && task.duration <= 30 },
-    { id: "deep", name: "Deep work", description: "Tasks estimated at 90 minutes or more", test: (task: Task) => !task.completed && task.duration >= 90 },
-    { id: "recurring", name: "Recurring", description: "Routines that automatically return", test: (task: Task) => !task.completed && Boolean(task.recurrence && task.recurrence !== "none") },
-    { id: "in-progress", name: "In progress", description: "Work already moving", test: (task: Task) => !task.completed && task.status === "in-progress" },
-    { id: "someday", name: "Someday", description: "Ideas without a near-term commitment", test: (task: Task) => !task.completed && task.due === "Someday" },
+    { id: "priority", name: "Priority radar", description: "Very High and High priority work", test: (task: Task) => isActionableTask(task) && (task.priority === "Very High" || task.priority === "High") },
+    { id: "quick", name: "Quick wins", description: "Tasks that need 30 minutes or less", test: (task: Task) => isActionableTask(task) && task.duration <= 30 },
+    { id: "deep", name: "Deep work", description: "Tasks estimated at 90 minutes or more", test: (task: Task) => isActionableTask(task) && task.duration >= 90 },
+    { id: "recurring", name: "Recurring", description: "Routines that automatically return", test: (task: Task) => isActionableTask(task) && Boolean(task.recurrence && task.recurrence !== "none") },
+    { id: "in-progress", name: "In progress", description: "Work already moving", test: (task: Task) => isActionableTask(task) && task.status === "in-progress" },
+    { id: "na", name: "Not applicable", description: "N/A tasks kept for reference", test: (task: Task) => task.status === "na" },
+    { id: "someday", name: "Someday", description: "Ideas without a near-term commitment", test: (task: Task) => isActionableTask(task) && task.due === "Someday" },
   ];
   const labels = Array.from(new Set(tasks.flatMap((task) => task.labels ?? []))).sort();
   const activeSmartFilter = smartFilters.find((filter) => filter.id === selected);
   const selectedLabel = selected.startsWith("label:") ? selected.slice(6) : null;
   const selectedTasks = selectedLabel
-    ? tasks.filter((task) => !task.completed && (task.labels ?? []).includes(selectedLabel))
+    ? tasks.filter((task) => isActionableTask(task) && (task.labels ?? []).includes(selectedLabel))
     : activeSmartFilter ? tasks.filter(activeSmartFilter.test) : [];
   const selectedTitle = selectedLabel ? `@${selectedLabel}` : activeSmartFilter?.name ?? "Smart filter";
 
@@ -2399,7 +2375,7 @@ function ListView({ tasks, projects, title, onToggle, onEdit, onFocus, empty = "
 
 function TaskRow({ task, projects, onToggle, onEdit, onFocus }: { task: Task; projects: Project[]; onToggle: (id: number) => void; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
   const subtasks = subtaskProgress(task);
-  return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={`Toggle ${task.title}`}>{task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}</h3><div><span><span className="project-dot" style={{ background: projects.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.completed ? `Completed ${formatCompletedAt(task.completedAt)}` : task.due}</span><span><Clock3 size={13} />{task.time}</span>{task.recurrence && task.recurrence !== "none" && <span><RotateCcw size={13} />{recurrenceLabel(task.recurrence)}</span>}{subtasks.total > 0 && <span><Rows3 size={13} />{subtasks.completed}/{subtasks.total} steps</span>}</div>{Boolean(task.labels?.length) && <div className="task-labels">{task.labels?.slice(0, 4).map((label) => <em key={label}>@{label}</em>)}</div>}</div><span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span><TaskActions task={task} onEdit={onEdit} onFocus={onFocus} /></article>;
+  return <article className={task.completed ? "task-row completed" : "task-row"}><button className={task.completed ? "round-check checked" : "round-check"} onClick={() => onToggle(task.id)} aria-label={task.status === "na" ? `N/A: ${task.title}` : `Toggle ${task.title}`} disabled={task.status === "na"}>{task.status === "na" ? "—" : task.completed && <Check size={13} />}</button><div className="task-row-main" onClick={() => onEdit(task)}><h3>{task.title}{task.status === "na" && <span className="task-na-badge">N/A</span>}</h3><div><span><span className="project-dot" style={{ background: projects.find((project) => project.name === task.project)?.color }} />{task.project}</span><span><CalendarDays size={13} />{task.completed ? `Completed ${formatCompletedAt(task.completedAt)}` : task.due}</span><span><Clock3 size={13} />{task.time}</span>{task.recurrence && task.recurrence !== "none" && <span><RotateCcw size={13} />{recurrenceLabel(task.recurrence)}</span>}{subtasks.total > 0 && <span><Rows3 size={13} />{subtasks.completed}/{subtasks.total} steps</span>}</div>{Boolean(task.labels?.length) && <div className="task-labels">{task.labels?.slice(0, 4).map((label) => <em key={label}>@{label}</em>)}</div>}</div><span className={`priority-label ${priorityClass(task.priority)}`}>{task.priority}</span><TaskActions task={task} onEdit={onEdit} onFocus={onFocus} /></article>;
 }
 
 function TaskActions({ task, onEdit, onFocus }: { task: Task; onEdit: (task: Task) => void; onFocus: (task: Task) => void }) {
@@ -2428,7 +2404,7 @@ function TaskActions({ task, onEdit, onFocus }: { task: Task; onEdit: (task: Tas
       {open && (
         <div className="task-actions-menu" role="menu">
           <button type="button" role="menuitem" onClick={() => { setOpen(false); onEdit(task); }}><Pencil size={15} /> Edit task</button>
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); onFocus(task); }}><Zap size={15} /> Start focus</button>
+          {isActionableTask(task) && <button type="button" role="menuitem" onClick={() => { setOpen(false); onFocus(task); }}><Zap size={15} /> Start focus</button>}
         </div>
       )}
     </div>
@@ -2451,8 +2427,8 @@ function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenam
     return {
       ...project,
       taskCount: projectTasks.length,
-      openCount: projectTasks.length - completed,
-      percent: projectTasks.length ? Math.round((completed / projectTasks.length) * 100) : 0,
+      openCount: projectTasks.filter(isActionableTask).length,
+      percent: projectTasks.some(task => task.status !== "na") ? Math.round(completed / projectTasks.filter(task => task.status !== "na").length * 100) : 0,
     };
   });
 

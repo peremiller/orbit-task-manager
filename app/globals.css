@@ -461,7 +461,7 @@ kbd { font-family: inherit; }
 .mobile-add { display: none; }
 
 /* Alternate views */
-.board-grid { max-width: 1460px; margin: auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; align-items: start; }
+.board-grid { max-width: 1800px; margin: auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; align-items: start; }
 .board-column { padding: 16px; }
 .board-column-heading { display: flex; justify-content: space-between; align-items: center; padding: 2px 3px 14px; }
 .board-column-heading > div { display: flex; align-items: center; gap: 8px; }.board-column-heading i { width: 8px; height: 8px; border-radius: 50%; }.board-column-heading h2 { margin: 0; font-size: 14px; }.board-column-heading span { color: var(--muted); font-size: 10px; }.board-column-heading button { display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); }
@@ -1515,3 +1515,8 @@ kbd { font-family: inherit; }
   .progress-project-table th:first-child { min-width: 150px; max-width: 180px; }
   .project-merge-dialog { padding: 18px; }
 }
+
+/* N/A is retained for reference without implying task completion. */
+.sheet-status-na { color: #596271; background: #e7eaf0; }
+.task-na-badge { display: inline-block; margin-left: 8px; padding: 2px 7px; border-radius: 999px; color: #596271; background: #e7eaf0; font-size: 11px; font-weight: 600; vertical-align: middle; }
+[data-theme="dark"] .sheet-status-na, [data-theme="dark"] .task-na-badge { color: #c1cad7; background: #343c4b; }

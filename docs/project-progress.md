@@ -16,3 +16,5 @@ Projects / Priorities offers a searchable merge dialog. Select two or more exist
 - These are retained task records, not historical snapshots or an event log. Reopening/deleting tasks changes history; merging groups all retained completions under the destination project. Due-date achievement and targets are not inferred from relative due strings.
 
 Verification: `npm run test:projects`, targeted ESLint, TypeScript, and production build. Tests cover lossless merges, stale selections, nested source aliases, legacy recovery, Manila midnight, leap days, calendar boundaries, all filter populations, future/undated records, and reconciliation between project/day/weekday/period totals.
+
+N/A tasks remain in Inbox for reference and can be restored through their status selector. They are excluded from open work, completion percentages, completion charts, and karma. Marking a recurring task N/A does not create another occurrence.

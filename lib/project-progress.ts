@@ -6,7 +6,7 @@ export const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAY_MS = 86_400_000;
 const manilaDate = new Intl.DateTimeFormat("en-CA", { timeZone: PROGRESS_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
 
-export type ProgressTask = { id: number; title: string; project: string; completed: boolean; completedAt?: string };
+export type ProgressTask = { id: number; title: string; project: string; completed: boolean; status?: string; completedAt?: string };
 
 function calendarDate(key: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return null;
@@ -72,7 +72,7 @@ export function buildProjectProgress<T extends ProgressTask>(tasks: T[], project
   const population = progressProjects(tasks, projects).filter((project) => (!options.projectId || project.id === options.projectId) && (!options.status || options.status === "all" || (options.status === "disabled" ? project.disabled : !project.disabled)));
   const names = new Set(population.map((project) => project.name));
   const scopedTasks = tasks.filter((task) => names.has(task.project));
-  const dated = scopedTasks.filter((task) => task.completed).map((task) => ({ task, date: completionDateKey(task.completedAt) }));
+  const dated = scopedTasks.filter((task) => task.completed && task.status !== "na").map((task) => ({ task, date: completionDateKey(task.completedAt) }));
   const undatedCompleted = dated.filter((item) => item.date === null).length;
   const completions = dated.filter((item): item is { task: T; date: string } => item.date !== null && item.date >= window.start && item.date <= window.end && item.date <= today);
   const dayCounts = new Map<string, number>();
@@ -90,10 +90,11 @@ export function buildProjectProgress<T extends ProgressTask>(tasks: T[], project
     start = shiftProgressDay(end, 1);
   }
   const rows = population.map((project) => {
-    const projectTasks = scopedTasks.filter((task) => task.project === project.name);
+    const allProjectTasks = scopedTasks.filter((task) => task.project === project.name);
+    const projectTasks = allProjectTasks.filter(task => task.status !== "na");
     const periodTasks = completions.filter((item) => item.task.project === project.name);
     const done = projectTasks.filter((task) => task.completed).length;
-    return { project, total: projectTasks.length, done, open: projectTasks.length - done, percent: projectTasks.length ? Math.round(done / projectTasks.length * 100) : null, periodCompleted: periodTasks.length, counts: buckets.map((bucket) => periodTasks.filter((item) => item.date >= bucket.start && item.date <= bucket.end).length) };
+    return { project, notApplicable: allProjectTasks.length - projectTasks.length, total: projectTasks.length, done, open: projectTasks.length - done, percent: projectTasks.length ? Math.round(done / projectTasks.length * 100) : null, periodCompleted: periodTasks.length, counts: buckets.map((bucket) => periodTasks.filter((item) => item.date >= bucket.start && item.date <= bucket.end).length) };
   });
-  return { ...window, today, days, buckets, rows, weekdays, completions, undatedCompleted, totalCompleted: completions.length, activeDays: dayCounts.size, projectsProgressed: new Set(completions.map((item) => item.task.project)).size, openTasks: scopedTasks.filter((task) => !task.completed).length };
+  return { ...window, today, days, buckets, rows, weekdays, completions, undatedCompleted, totalCompleted: completions.length, activeDays: dayCounts.size, projectsProgressed: new Set(completions.map((item) => item.task.project)).size, openTasks: scopedTasks.filter((task) => !task.completed && task.status !== "na").length };
 }

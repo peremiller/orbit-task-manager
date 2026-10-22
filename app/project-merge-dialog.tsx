@@ -2,11 +2,12 @@
 
 import { ArrowRight, Merge, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { isActionableTask } from "@/lib/task-status";
 import { projectMergeError, type Project, type ProjectMergeRequest } from "@/lib/projects";
 
 type Props = {
   projects: Project[];
-  tasks: { project: string; completed: boolean }[];
+  tasks: { project: string; completed: boolean; status?: string }[];
   onMerge: (request: ProjectMergeRequest) => string | null;
   onClose: () => void;
 };
@@ -42,7 +43,9 @@ export function ProjectMergeDialog({ projects, tasks, onMerge, onClose }: Props)
   const disabled = disabledOverride ?? destination?.disabled ?? (selected.length > 0 && selected.every((project) => project.disabled));
   const selectedNames = new Set(selected.map((project) => project.name));
   const combinedTasks = tasks.filter((task) => selectedNames.has(task.project));
-  const completedCount = combinedTasks.filter((task) => task.completed).length;
+  const completedCount = combinedTasks.filter((task) => task.completed && task.status !== "na").length;
+  const openCount = combinedTasks.filter(isActionableTask).length;
+  const naCount = combinedTasks.filter(task => task.status === "na").length;
   const matches = projects.filter((project) => project.name.toLowerCase().includes(search.trim().toLowerCase()));
   const request: ProjectMergeRequest = { projectIds: selectedIds, destinationId: destinationId === "__new__" ? null : destinationId, name, disabled };
 
@@ -108,7 +111,7 @@ export function ProjectMergeDialog({ projects, tasks, onMerge, onClose }: Props)
         </> : <section className="project-merge-review" aria-label="Merge preview" tabIndex={-1} ref={review}>
           <ul>{selected.map((project) => <li key={project.id}><span>{project.name}</span><small>{tasks.filter((task) => task.project === project.name).length} tasks · {project.disabled ? "Disabled" : "Active"}</small></li>)}</ul>
           <ArrowRight size={22} aria-hidden="true" />
-          <div className="project-merge-target"><strong>{name.trim()}</strong><span>{combinedTasks.length} tasks · {disabled ? "Disabled" : "Active"}</span><small>{completedCount} completed · {combinedTasks.length - completedCount} open</small></div>
+          <div className="project-merge-target"><strong>{name.trim()}</strong><span>{combinedTasks.length} tasks · {disabled ? "Disabled" : "Active"}</span><small>{completedCount} completed · {openCount} open{naCount > 0 ? ` · ${naCount} N/A` : ""}</small></div>
           <p>The selected project entries will become this one project. All their tasks and completion history are kept, and the result syncs across your devices.</p>
           {disabled && <p><strong>The destination is disabled.</strong> Its tasks will stay out of active planning until you re-enable it.</p>}
         </section>}
