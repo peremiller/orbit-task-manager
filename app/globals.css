@@ -229,7 +229,8 @@ button, select { cursor: pointer; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(36, 87, 255, .22); outline-offset: 2px; }
 
 .app-shell { min-height: 100vh; display: grid; grid-template-columns: 254px minmax(0, 1fr); }
-.sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; width: 254px; display: flex; flex-direction: column; padding: 28px 18px 20px; background: rgba(255,255,255,.84); backdrop-filter: blur(18px); border-right: 1px solid var(--line); }
+.sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; width: 254px; display: flex; flex-direction: column; overflow-y: auto; padding: 28px 18px 20px; background: rgba(255,255,255,.84); backdrop-filter: blur(18px); border-right: 1px solid var(--line); }
+.sidebar > .brand-row, .sidebar > .create-button, .sidebar > .main-nav, .sidebar > .sidebar-footer { flex-shrink: 0; }
 .brand-row { display: flex; align-items: center; gap: 11px; padding: 0 12px 28px; }
 .brand-mark { width: 35px; height: 35px; position: relative; border: 4px solid var(--blue); border-radius: 50%; }
 .brand-mark span { position: absolute; width: 10px; height: 10px; background: var(--blue); border: 3px solid white; border-radius: 50%; right: -8px; top: -5px; }
@@ -245,7 +246,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .nav-item.active { color: white; background: var(--blue); box-shadow: 0 8px 20px rgba(36,87,255,.18); }
 .nav-item em, .project-link em { min-width: 20px; height: 20px; display: grid; place-items: center; padding: 0 5px; border-radius: 7px; background: #edf0f4; color: #707783; font-size: 11px; font-style: normal; }
 .nav-item.active em { color: white; background: rgba(255,255,255,.18); }
-.sidebar-section { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; margin-top: 26px; }
+.sidebar-section { min-height: 0; display: flex; flex: 1 0 auto; flex-direction: column; margin-top: 26px; }
 .section-label { display: flex; align-items: center; justify-content: space-between; padding: 0 12px 9px; color: #979ca5; font-size: 10px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
 .section-label-link { display: inline-flex; align-items: center; margin: -3px -4px; padding: 3px 4px; border-radius: 6px; color: inherit; text-decoration: none; transition: color .16s ease, background-color .16s ease; }
 .section-label-link:hover { color: var(--blue); background: var(--blue-soft); }
@@ -254,7 +255,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .section-label button, .project-link { border: 0; background: transparent; }
 .section-label button { display: grid; place-items: center; padding: 3px; border-radius: 6px; color: #8a909a; transition: color .16s ease, background-color .16s ease; }
 .section-label button:hover { color: var(--blue); background: var(--blue-soft); }
-.sidebar-project-list { min-height: 0; overflow-y: auto; padding-right: 3px; scrollbar-width: thin; scrollbar-color: #cfd5df transparent; }
+.sidebar-project-list { min-height: 0; max-height: 320px; overflow-y: auto; padding-right: 3px; scrollbar-width: thin; scrollbar-color: #cfd5df transparent; }
 .sidebar-project-list::-webkit-scrollbar { width: 5px; }
 .sidebar-project-list::-webkit-scrollbar-track { background: transparent; }
 .sidebar-project-list::-webkit-scrollbar-thumb { border-radius: 999px; background: #cfd5df; }
