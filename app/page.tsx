@@ -19,6 +19,7 @@ import {
   ListFilter,
   LogOut,
   Menu,
+  Merge,
   Moon,
   MoreHorizontal,
   Network,
@@ -42,6 +43,7 @@ import {
   Zap,
 } from "lucide-react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
@@ -61,7 +63,8 @@ import {
 import { computeKarma, clampDailyGoal, KARMA_LEVELS, type KarmaStats } from "@/lib/karma";
 import { filterTasks, normalizeProjectFilterQuery, projectFilterHref } from "@/lib/task-filters";
 import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-recovery";
-import { tasksForEnabledProjects, type Project } from "@/lib/projects";
+import { mergeProjects, projectForId, remapMergedTaskProjects, tasksForEnabledProjects, type Project, type ProjectMergeRequest } from "@/lib/projects";
+import { ProjectMergeDialog } from "./project-merge-dialog";
 import { createDefaultWorkTrackingState, normalizeWorkTracking, type WorkTrackingState } from "@/lib/work-tracking";
 import { GOAL_COLORS, normalizeGoals, uniqueGoalId, type Goal } from "@/lib/goals";
 import { ActualsView, EffortPlanView, SelectionManagerView, TimesheetReportView, WorkDashboardView } from "./work-tracking-views";
@@ -72,12 +75,14 @@ import type { TaskAttachment } from "@/lib/task-attachments";
 import { TaskSheet, type TaskCellPatch } from "./task-sheet";
 import { BackToTop } from "./back-to-top";
 
+const ProjectProgressView = dynamic(() => import("./project-progress-view").then((module) => module.ProjectProgressView), { loading: () => <p role="status">Loading project progress…</p> });
+
 type Priority = "Very High" | "High" | "Medium" | "Low";
 export type TaskStatus = "todo" | "in-progress" | "done";
 type StatusFilter = "All" | TaskStatus;
 type Recurrence = "none" | "daily" | "weekdays" | "weekly" | "monthly";
 type Subtask = { id: number; title: string; completed: boolean };
-export type View = "today" | "inbox" | "upcoming" | "planner" | "mindMap" | "goals" | "board" | "kanban" | "filtersLabels" | "projects" | "analytics" | "timerHistory" | "completed" | "actuals" | "effortPlan" | "timesheetReport" | "workDashboard" | "selectionManager";
+export type View = "today" | "inbox" | "upcoming" | "planner" | "mindMap" | "goals" | "board" | "kanban" | "filtersLabels" | "projects" | "projectProgress" | "analytics" | "timerHistory" | "completed" | "actuals" | "effortPlan" | "timesheetReport" | "workDashboard" | "selectionManager";
 
 export type Task = {
   id: number;
@@ -171,6 +176,7 @@ const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: s
   kanban: { eyebrow: "A little paper. A lot of progress.", title: "Kanban", description: "Put your ideas on the wall and move them forward, one sticky note at a time." },
   filtersLabels: { eyebrow: "Your command center", title: "Filters & labels", description: "Find the right work instantly with smart views and reusable labels." },
   projects: { eyebrow: "Work with a purpose", title: "Projects / Priorities", description: "Manage what matters now. Disable a project when it can wait, and re-enable it whenever you’re ready." },
+  projectProgress: { eyebrow: "See your momentum", title: "Project Progress", description: "Your projects / priorities across days, weeks, months, quarters, and years." },
   analytics: { eyebrow: "Your momentum", title: "Insights", description: "See how focus compounds over time." },
   timerHistory: { eyebrow: "Your focused time", title: "Timer History", description: "Review every completed and stopped focus session." },
   completed: { eyebrow: "Progress worth noticing", title: "Completed", description: "A record of what you moved forward." },
@@ -192,6 +198,7 @@ const VIEW_PATHS: Record<View, string> = {
   kanban: "/kanban",
   filtersLabels: "/filters-labels",
   projects: "/projects",
+  projectProgress: "/project-progress",
   analytics: "/insights",
   timerHistory: "/timer-history",
   completed: "/completed",
@@ -510,6 +517,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<"All" | Priority>("All");
   const [projectFilter, setProjectFilter] = useState<string[]>(() => normalizeProjectFilterQuery(initialProjectFilter));
+  const effectiveProjectFilter = useMemo(() => normalizeProjectFilterQuery(remapMergedTaskProjects(projectFilter.map((project) => ({ project })), projects).map((item) => item.project)), [projectFilter, projects]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [dueFilter, setDueFilter] = useState("All");
   const [labelFilter, setLabelFilter] = useState("All");
@@ -518,6 +526,8 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [subtaskInput, setSubtaskInput] = useState("");
   const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [projectMergeOpen, setProjectMergeOpen] = useState(false);
+  const [progressInitialProject, setProgressInitialProject] = useState<string | null>(null);
   const [newProjectDraft, setNewProjectDraft] = useState(emptyProjectDraft);
   const [projectCreateError, setProjectCreateError] = useState("");
   const [editingProject, setEditingProject] = useState<Project | null>(null);
@@ -706,7 +716,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         }
 
         if (!legacyRecoveryComplete && user.id === "aj-miller" && (legacyTasksBackup.length || legacyProjectsBackup.length)) {
-          const recoveredTasks = mergeRecoveredTasks(nextTasks, legacyTasksBackup);
+          const recoveredTasks = mergeRecoveredTasks(nextTasks, remapMergedTaskProjects(legacyTasksBackup, nextProjects));
           const recoveredProjects = mergeRecoveredProjects(nextProjects, legacyProjectsBackup);
           recoveredLegacyWorkspace = JSON.stringify(recoveredTasks) !== JSON.stringify(nextTasks)
             || JSON.stringify(recoveredProjects) !== JSON.stringify(nextProjects);
@@ -961,7 +971,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       if (event.key.toLowerCase() === "q") {
         event.preventDefault();
-        const defaultProject = enabledProjects.find((project) => project.id === activeProjectId)?.name ?? enabledProjects[0]?.name;
+        const defaultProject = projectForId(enabledProjects, activeProjectId)?.name ?? enabledProjects[0]?.name;
         if (!defaultProject) {
           setToast("Re-enable or create a project before adding a task.");
           return;
@@ -1008,8 +1018,8 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   // Keep disabled-project tasks accessible in their workspace and in completion history.
   const taskViewTasks = activeView === "completed" || activeProjectId ? tasks : activeTasks;
   const visibleTasks = useMemo(() => {
-    return filterTasks(taskViewTasks, { search, priority: priorityFilter, projects: projectFilter, status: statusFilter, due: dueFilter, label: labelFilter });
-  }, [dueFilter, labelFilter, priorityFilter, projectFilter, search, statusFilter, taskViewTasks]);
+    return filterTasks(taskViewTasks, { search, priority: priorityFilter, projects: effectiveProjectFilter, status: statusFilter, due: dueFilter, label: labelFilter });
+  }, [dueFilter, effectiveProjectFilter, labelFilter, priorityFilter, search, statusFilter, taskViewTasks]);
 
   const inboxPriorityProjects = useMemo<PriorityProjectFilter[]>(() => {
     if (activeView !== "inbox" || priorityFilter === "All") return [];
@@ -1046,7 +1056,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const filteredCompletedCount = visibleTasks.filter((task) => task.completed).length;
   const filteredProgress = visibleTasks.length ? Math.round((filteredCompletedCount / visibleTasks.length) * 100) : 0;
   const priorities = filteredOpenTasks.filter((task) => task.priority === "Very High" || task.priority === "High");
-  const activeProject = projects.find((project) => project.id === activeProjectId) ?? null;
+  const activeProject = projectForId(projects, activeProjectId) ?? null;
   const heading = activeProject
     ? { eyebrow: "Project workspace", title: activeProject.name, description: "Keep every task, decision, and next move in one clear orbit." }
     : activeView === "today"
@@ -1054,7 +1064,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       : VIEW_TITLES[activeView];
   const isWorkTrackingView = activeView === "actuals" || activeView === "effortPlan" || activeView === "timesheetReport" || activeView === "workDashboard" || activeView === "selectionManager";
   const canEditSelectionManager = sessionUser?.canEditSelectionManager === true;
-  const taskFiltersVisible = !isWorkTrackingView && activeView !== "analytics" && activeView !== "timerHistory" && activeView !== "filtersLabels" && activeView !== "mindMap" && activeView !== "goals" && (activeView !== "projects" || Boolean(activeProject));
+  const taskFiltersVisible = !isWorkTrackingView && activeView !== "projectProgress" && activeView !== "analytics" && activeView !== "timerHistory" && activeView !== "filtersLabels" && activeView !== "mindMap" && activeView !== "goals" && (activeView !== "projects" || Boolean(activeProject));
   const activeFilterCount = [search.trim(), projectFilter.length > 0, priorityFilter !== "All", statusFilter !== "All", dueFilter !== "All", labelFilter !== "All"].filter(Boolean).length;
   const viewTaskCount = activeProject
     ? visibleTasks.filter((task) => task.project === activeProject.name).length
@@ -1100,10 +1110,19 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   }
 
   function navigate(view: View) {
+    if (view === "projectProgress") setProgressInitialProject(null);
     setActiveView(view);
     setActiveProjectId(null);
     setMobileMenuOpen(false);
     router.push(projectFilterHref(VIEW_PATHS[view], projectFilter));
+  }
+
+  function openProjectProgress(project?: Project) {
+    setProgressInitialProject(project?.name ?? null);
+    setActiveView("projectProgress");
+    setActiveProjectId(null);
+    setMobileMenuOpen(false);
+    router.push("/project-progress");
   }
 
   function navigateProject(project: Project) {
@@ -1123,7 +1142,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   }
 
   function openNewTask() {
-    const defaultProject = enabledProjects.find((project) => project.id === activeProjectId)?.name ?? enabledProjects[0]?.name;
+    const defaultProject = projectForId(enabledProjects, activeProjectId)?.name ?? enabledProjects[0]?.name;
     if (!defaultProject) {
       setToast("Re-enable or create a project before adding a task.");
       return;
@@ -1151,7 +1170,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   }
 
   function createQuickTask(text: string) {
-    const defaultProject = enabledProjects.find((project) => project.id === activeProjectId)?.name ?? enabledProjects[0]?.name;
+    const defaultProject = projectForId(enabledProjects, activeProjectId)?.name ?? enabledProjects[0]?.name;
     if (!defaultProject) {
       setToast("Re-enable or create a project before adding a task.");
       return false;
@@ -1297,11 +1316,29 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     setProjectNameDraft(project.name);
   }
 
+  function mergeSelectedProjects(request: ProjectMergeRequest): string | null {
+    try {
+      const result = mergeProjects(tasks, projects, request, request.destinationId === null ? uniqueProjectId(request.name, projects) : undefined);
+      setTasks(result.tasks);
+      setProjects(result.projects);
+      const sourceNames = new Set(result.sourceNames);
+      changeProjectFilter(projectFilter.map((name) => sourceNames.has(name) ? result.destination.name : name));
+      setDraft((current) => sourceNames.has(current.project) ? { ...current, project: result.destination.name } : current);
+      setFocusTask((current) => current && sourceNames.has(current.project) ? { ...current, project: result.destination.name } : current);
+      setProjectMergeOpen(false);
+      setToast(`${request.projectIds.length} projects merged into ${result.destination.name}. All tasks kept.`);
+      navigateProject(result.destination);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "The merge could not be applied. Try again.";
+    }
+  }
+
   function toggleProjectDisabled(project: Project) {
     const disabled = !project.disabled;
     setProjects((current) => current.map((item) => item.id === project.id ? { ...item, disabled } : item));
     if (disabled) {
-      changeProjectFilter(projectFilter.filter((name) => name !== project.name));
+      changeProjectFilter(effectiveProjectFilter.filter((name) => name !== project.name));
       if (!editingTask && draft.project === project.name) {
         setDraft((current) => ({ ...current, project: enabledProjects.find((item) => item.id !== project.id)?.name ?? "" }));
       }
@@ -1594,6 +1631,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     { view: "planner", label: "Planner", icon: Clock3 },
     { view: "mindMap", label: "Mind Map", icon: Network, count: tasks.length },
     { view: "goals", label: "Goals", icon: Target, count: goals.length },
+    { view: "projectProgress", label: "Project Progress", icon: TrendingUp },
     { view: "actuals", label: "Actuals", icon: Rows3 },
     { view: "effortPlan", label: "Effort Plan", icon: CalendarDays },
     { view: "timesheetReport", label: "Timesheet Report", icon: BarChart3 },
@@ -1651,7 +1689,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           </div>
           <div className="sidebar-project-list" aria-label={`${enabledProjects.length} active projects / priorities`}>
             {enabledProjects.map((project) => (
-              <button className={activeProjectId === project.id ? "project-link active" : "project-link"} key={project.id} onClick={() => navigateProject(project)}>
+              <button className={activeProject?.id === project.id ? "project-link active" : "project-link"} key={project.id} onClick={() => navigateProject(project)}>
                 <span className="project-dot" style={{ background: project.color }} />
                 <span>{project.name}</span>
                 <em>{tasks.filter((task) => task.project === project.name && !task.completed).length}</em>
@@ -1707,6 +1745,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             <div className="heading-actions">
               <button className="secondary-button" type="button" onClick={() => setShowSearch(true)}><Search size={17} /> Search</button>
               {activeProject && <button className="secondary-button" type="button" onClick={() => toggleProjectDisabled(activeProject)}>{activeProject.disabled ? <Play size={17} /> : <Pause size={17} />}{activeProject.disabled ? "Re-enable project" : "Disable project"}</button>}
+              {activeProject && <button className="secondary-button" type="button" onClick={() => openProjectProgress(activeProject)}><TrendingUp size={17} /> View progress</button>}
               {activeProject && !activeProject.disabled && <button className="primary-button" type="button" onClick={openNewTask}><Plus size={17} /> Add task</button>}
               {activeView === "mindMap" && <button className="primary-button" type="button" onClick={openNewTask}><Plus size={17} /> Add task</button>}
               {activeView === "goals" && <button className="primary-button" type="button" onClick={openNewGoal}><Plus size={17} /> New goal</button>}
@@ -1716,7 +1755,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
 
           {activeProject?.disabled && <div className="project-disabled-notice" role="status"><Pause size={18} /><p><strong>This project is disabled.</strong> Its tasks and history are saved. Re-enable it to include its tasks in active planning again.</p></div>}
 
-          {activeView !== "timerHistory" && activeView !== "goals" && !isWorkTrackingView && !activeProject?.disabled && (
+          {activeView !== "timerHistory" && activeView !== "goals" && activeView !== "projectProgress" && !isWorkTrackingView && !activeProject?.disabled && (
             <form className="quick-capture" onSubmit={addQuickTask}>
               <span className="quick-capture-icon"><Sparkles size={18} /></span>
               <div className="quick-capture-field">
@@ -1733,7 +1772,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
               tasks={taskViewTasks}
               projects={activeView === "completed" || activeProject ? projects : enabledProjects}
               priority={priorityFilter}
-              project={projectFilter}
+              project={effectiveProjectFilter}
               status={statusFilter}
               due={dueFilter}
               label={labelFilter}
@@ -1792,7 +1831,8 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           {activeView === "completed" && taskLayout === "original" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
             ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="This project is ready for its first task." />
-            : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} onToggleProject={toggleProjectDisabled} />)}
+            : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} onToggleProject={toggleProjectDisabled} onMergeProjects={() => setProjectMergeOpen(true)} onViewProgress={() => openProjectProgress()} />)}
+          {activeView === "projectProgress" && <ProjectProgressView tasks={tasks} projects={projects} initialProjectName={progressInitialProject} onEditTask={openEditTask} />}
           {activeView === "analytics" && <AnalyticsView tasks={tasks} focusHistory={focusHistory} karma={karma} dailyGoal={dailyGoal} onGoalChange={updateDailyGoal} />}
           {activeView === "timerHistory" && <TimerHistoryView focusHistory={focusHistory} search={search} now={clockNow} />}
           {activeView === "actuals" && <ActualsView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
@@ -1804,10 +1844,12 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       </main>
 
       <div className="floating-controls">
-        {!isWorkTrackingView && activeView !== "goals" && <button className="mobile-add" onClick={openNewTask} aria-label="Add task"><Plus size={22} /></button>}
+        {!isWorkTrackingView && activeView !== "goals" && activeView !== "projectProgress" && <button className="mobile-add" onClick={openNewTask} aria-label="Add task"><Plus size={22} /></button>}
         {activeView === "goals" && <button className="mobile-add" onClick={openNewGoal} aria-label="Add goal"><Plus size={22} /></button>}
         <BackToTop />
       </div>
+
+      {projectMergeOpen && <ProjectMergeDialog projects={projects} tasks={tasks} onMerge={mergeSelectedProjects} onClose={() => setProjectMergeOpen(false)} />}
 
       {taskModalOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setTaskModalOpen(false)}>
@@ -2393,7 +2435,7 @@ function TaskActions({ task, onEdit, onFocus }: { task: Task; onEdit: (task: Tas
   );
 }
 
-function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenameProject, onDeleteProject, onToggleProject }: { tasks: Task[]; projects: Project[]; onCreateProject: () => void; onOpenProject: (project: Project) => void; onRenameProject: (project: Project) => void; onDeleteProject: (project: Project) => void; onToggleProject: (project: Project) => void }) {
+function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenameProject, onDeleteProject, onToggleProject, onMergeProjects, onViewProgress }: { tasks: Task[]; projects: Project[]; onCreateProject: () => void; onOpenProject: (project: Project) => void; onRenameProject: (project: Project) => void; onDeleteProject: (project: Project) => void; onToggleProject: (project: Project) => void; onMergeProjects: () => void; onViewProgress: () => void }) {
   const [layout, setLayout] = useState<"list" | "grid">("list");
   const [status, setStatus] = useState<"all" | "active" | "disabled">("all");
   const activeCount = projects.filter((project) => !project.disabled).length;
@@ -2422,6 +2464,8 @@ function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenam
           <h2>{activeCount} active · {disabledCount} disabled</h2>
         </div>
         <div className="projects-toolbar-actions">
+          <button className="secondary-button" type="button" onClick={onViewProgress}><TrendingUp size={16} /> View progress</button>
+          <button className="secondary-button" type="button" onClick={onMergeProjects} disabled={projects.length < 2}><Merge size={16} /> Merge projects</button>
           <button className="primary-button" type="button" onClick={onCreateProject}><Plus size={16} /> New project</button>
           <div className="project-view-switch" role="group" aria-label="Project layout">
             <button type="button" className={layout === "list" ? "active" : ""} onClick={() => setLayout("list")} aria-pressed={layout === "list"}><Rows3 size={16} /> List</button>

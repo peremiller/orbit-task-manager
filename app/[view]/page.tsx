@@ -13,6 +13,7 @@ const ROUTE_VIEWS: Record<string, View> = {
   kanban: "kanban",
   "filters-labels": "filtersLabels",
   projects: "projects",
+  "project-progress": "projectProgress",
   insights: "analytics",
   "timer-history": "timerHistory",
   completed: "completed",

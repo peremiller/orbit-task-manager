@@ -9,6 +9,7 @@ type RecoverableTask = {
 type RecoverableProject = {
   id: string;
   name: string;
+  mergedFrom?: { name: string }[];
 };
 
 function recoveryProjectId(name: string, projects: RecoverableProject[]) {
@@ -51,7 +52,7 @@ export function mergeRecoveredTasks<TaskType extends RecoverableTask>(current: T
 
 export function mergeRecoveredProjects<ProjectType extends RecoverableProject>(current: ProjectType[], recovered: ProjectType[]) {
   const merged = [...current];
-  const names = new Set(current.map((project) => project.name.trim().toLowerCase()));
+  const names = new Set(current.flatMap((project) => [project.name, ...(project.mergedFrom ?? []).map((source) => source.name)]).map((name) => name.trim().toLowerCase()));
 
   for (const project of recovered) {
     const name = project.name.trim().toLowerCase();
