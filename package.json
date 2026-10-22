@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint . --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern .next",
+    "test:projects": "node --experimental-strip-types --test tests/projects.test.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "1.1.0",

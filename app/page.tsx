@@ -61,6 +61,7 @@ import {
 import { computeKarma, clampDailyGoal, KARMA_LEVELS, type KarmaStats } from "@/lib/karma";
 import { filterTasks, normalizeProjectFilterQuery, projectFilterHref } from "@/lib/task-filters";
 import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-recovery";
+import { tasksForEnabledProjects, type Project } from "@/lib/projects";
 import { createDefaultWorkTrackingState, normalizeWorkTracking, type WorkTrackingState } from "@/lib/work-tracking";
 import { GOAL_COLORS, normalizeGoals, uniqueGoalId, type Goal } from "@/lib/goals";
 import { ActualsView, EffortPlanView, SelectionManagerView, TimesheetReportView, WorkDashboardView } from "./work-tracking-views";
@@ -97,13 +98,6 @@ export type Task = {
   goalId?: string;
   kanbanColumnId?: string;
   attachments?: TaskAttachment[];
-};
-
-type Project = {
-  id: string;
-  name: string;
-  color: string;
-  description: string;
 };
 
 type PriorityProjectFilter = {
@@ -176,7 +170,7 @@ const VIEW_TITLES: Record<View, { eyebrow: string; title: string; description: s
   board: { eyebrow: "Flow of work", title: "Board", description: "Move tasks from intention to done." },
   kanban: { eyebrow: "A little paper. A lot of progress.", title: "Kanban", description: "Put your ideas on the wall and move them forward, one sticky note at a time." },
   filtersLabels: { eyebrow: "Your command center", title: "Filters & labels", description: "Find the right work instantly with smart views and reusable labels." },
-  projects: { eyebrow: "Work with a purpose", title: "Projects", description: "Every active outcome, in one clear place." },
+  projects: { eyebrow: "Work with a purpose", title: "Projects / Priorities", description: "Manage what matters now. Disable a project when it can wait, and re-enable it whenever you’re ready." },
   analytics: { eyebrow: "Your momentum", title: "Insights", description: "See how focus compounds over time." },
   timerHistory: { eyebrow: "Your focused time", title: "Timer History", description: "Review every completed and stopped focus session." },
   completed: { eyebrow: "Progress worth noticing", title: "Completed", description: "A record of what you moved forward." },
@@ -506,6 +500,8 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
   const [kanbanColumns, setKanbanColumns] = useState<KanbanColumn[]>(DEFAULT_KANBAN_COLUMNS);
   const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
+  const enabledProjects = useMemo(() => projects.filter((project) => !project.disabled), [projects]);
+  const activeTasks = useMemo(() => tasksForEnabledProjects(tasks, projects), [tasks, projects]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [todaySchedule, setTodaySchedule] = useState<ScheduleWindow>(DEFAULT_TODAY_SCHEDULE);
   const [activeView, setActiveView] = useState<View>(initialView);
@@ -965,7 +961,11 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       if (event.key.toLowerCase() === "q") {
         event.preventDefault();
-        const defaultProject = projects.find((project) => project.id === activeProjectId)?.name ?? projects[0]?.name ?? "";
+        const defaultProject = enabledProjects.find((project) => project.id === activeProjectId)?.name ?? enabledProjects[0]?.name;
+        if (!defaultProject) {
+          setToast("Re-enable or create a project before adding a task.");
+          return;
+        }
         setEditingTask(null);
         setDraft({ ...emptyDraft, project: defaultProject });
         window.setTimeout(() => setTaskModalOpen(true), 0);
@@ -975,7 +975,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           setFocusPickerOpen(false);
           setFocusOpen(true);
         } else {
-          setFocusTask((current) => current && !current.completed ? current : tasks.find((task) => !task.completed) ?? null);
+          setFocusTask((current) => current && !current.completed && activeTasks.some((task) => task.id === current.id) ? current : activeTasks.find((task) => !task.completed) ?? null);
           setFocusOpen(false);
           setFocusPickerOpen(true);
         }
@@ -1001,18 +1001,20 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     }
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [activeProjectId, focusTimer.status, projects, tasks]);
+  }, [activeProjectId, activeTasks, enabledProjects, focusTimer.status]);
 
   const karma = useMemo(() => computeKarma(tasks, dailyGoal, new Date(clockNow)), [clockNow, dailyGoal, tasks]);
 
+  // Keep disabled-project tasks accessible in their workspace and in completion history.
+  const taskViewTasks = activeView === "completed" || activeProjectId ? tasks : activeTasks;
   const visibleTasks = useMemo(() => {
-    return filterTasks(tasks, { search, priority: priorityFilter, projects: projectFilter, status: statusFilter, due: dueFilter, label: labelFilter });
-  }, [dueFilter, labelFilter, priorityFilter, projectFilter, search, statusFilter, tasks]);
+    return filterTasks(taskViewTasks, { search, priority: priorityFilter, projects: projectFilter, status: statusFilter, due: dueFilter, label: labelFilter });
+  }, [dueFilter, labelFilter, priorityFilter, projectFilter, search, statusFilter, taskViewTasks]);
 
   const inboxPriorityProjects = useMemo<PriorityProjectFilter[]>(() => {
     if (activeView !== "inbox" || priorityFilter === "All") return [];
 
-    const matchingTasks = filterTasks(tasks, {
+    const matchingTasks = filterTasks(activeTasks, {
       search,
       priority: priorityFilter,
       projects: [],
@@ -1036,9 +1038,9 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       .map(([name, count]) => ({ name, color: "#7b8494", count }));
 
     return [...knownProjects, ...unmatchedProjects];
-  }, [activeView, dueFilter, labelFilter, priorityFilter, projects, search, statusFilter, tasks]);
+  }, [activeView, activeTasks, dueFilter, labelFilter, priorityFilter, projects, search, statusFilter]);
 
-  const openTasks = tasks.filter((task) => !task.completed);
+  const openTasks = activeTasks.filter((task) => !task.completed);
   const completedCount = tasks.filter((task) => task.completed).length;
   const filteredOpenTasks = visibleTasks.filter((task) => !task.completed);
   const filteredCompletedCount = visibleTasks.filter((task) => task.completed).length;
@@ -1064,10 +1066,10 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const totalViewTaskCount = activeProject
     ? tasks.filter((task) => task.project === activeProject.name).length
     : activeView === "inbox" || activeView === "upcoming" || activeView === "planner"
-        ? tasks.filter((task) => !task.completed).length
+        ? taskViewTasks.filter((task) => !task.completed).length
         : activeView === "completed"
           ? tasks.filter((task) => task.completed).length
-          : tasks.length;
+          : taskViewTasks.length;
 
   function updateDailyGoal(value: number) {
     const goal = clampDailyGoal(value);
@@ -1121,7 +1123,11 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   }
 
   function openNewTask() {
-    const defaultProject = projects.find((project) => project.id === activeProjectId)?.name ?? projects[0]?.name ?? "";
+    const defaultProject = enabledProjects.find((project) => project.id === activeProjectId)?.name ?? enabledProjects[0]?.name;
+    if (!defaultProject) {
+      setToast("Re-enable or create a project before adding a task.");
+      return;
+    }
     setEditingTask(null);
     setDraft({ ...emptyDraft, project: defaultProject });
     setSubtaskInput("");
@@ -1131,7 +1137,11 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   }
 
   function openNewTaskForGoal(goalId: string) {
-    const defaultProject = projects[0]?.name ?? "";
+    const defaultProject = enabledProjects[0]?.name;
+    if (!defaultProject) {
+      setToast("Re-enable or create a project before adding a task.");
+      return;
+    }
     setEditingTask(null);
     setDraft({ ...emptyDraft, project: defaultProject, goalId });
     setSubtaskInput("");
@@ -1141,8 +1151,16 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   }
 
   function createQuickTask(text: string) {
-    const defaultProject = projects.find((project) => project.id === activeProjectId)?.name ?? projects[0]?.name ?? "";
+    const defaultProject = enabledProjects.find((project) => project.id === activeProjectId)?.name ?? enabledProjects[0]?.name;
+    if (!defaultProject) {
+      setToast("Re-enable or create a project before adding a task.");
+      return false;
+    }
     const parsed = parseQuickTask(text, projects, defaultProject);
+    if (projects.some((project) => project.name === parsed.project && project.disabled)) {
+      setToast("Re-enable that project before adding a task to it.");
+      return false;
+    }
     if (!parsed.title) {
       setToast("Add a task name before the details");
       return false;
@@ -1279,6 +1297,21 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     setProjectNameDraft(project.name);
   }
 
+  function toggleProjectDisabled(project: Project) {
+    const disabled = !project.disabled;
+    setProjects((current) => current.map((item) => item.id === project.id ? { ...item, disabled } : item));
+    if (disabled) {
+      changeProjectFilter(projectFilter.filter((name) => name !== project.name));
+      if (!editingTask && draft.project === project.name) {
+        setDraft((current) => ({ ...current, project: enabledProjects.find((item) => item.id !== project.id)?.name ?? "" }));
+      }
+      if (focusTimer.status === "idle") {
+        setFocusTask((current) => current?.project === project.name ? null : current);
+      }
+    }
+    setToast(`${project.name} ${disabled ? "disabled. Its tasks are saved." : "re-enabled."}`);
+  }
+
   function deleteProject() {
     if (!deletingProject) return;
     const project = deletingProject;
@@ -1360,6 +1393,11 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   function saveTask(event: FormEvent) {
     event.preventDefault();
     if (!draft.title.trim()) return;
+    if (projects.some((project) => project.name === draft.project && project.disabled)
+      && (!editingTask || editingTask.project !== draft.project)) {
+      setToast("Re-enable that project before assigning tasks to it.");
+      return;
+    }
     if (editingTask) {
       setTasks((current) => current.map((task) => task.id === editingTask.id ? { ...task, ...draft, labels: normalizeLabels(draft.labels), title: draft.title.trim() } : task));
       setToast("Task updated");
@@ -1432,6 +1470,11 @@ export default function Home({ initialView = "today", initialProjectId = null, i
 
   function updateTaskCell(id: number, patch: TaskCellPatch) {
     if (patch.title !== undefined && !patch.title.trim()) return;
+    if (patch.project && projects.some((project) => project.name === patch.project && project.disabled)
+      && tasks.find((task) => task.id === id)?.project !== patch.project) {
+      setToast("Re-enable that project before assigning tasks to it.");
+      return;
+    }
     setTasks(current => current.map(task => task.id === id ? { ...task, ...patch, ...(patch.title !== undefined ? { title: patch.title.trim() } : {}) } : task));
     setToast("Task updated");
   }
@@ -1471,6 +1514,11 @@ export default function Home({ initialView = "today", initialProjectId = null, i
 
   function openFocus(task: Task | null) {
     const nextTask = task ?? openTasks[0] ?? null;
+    if (nextTask && projects.some((project) => project.name === nextTask.project && project.disabled)
+      && focusTimer.taskId !== nextTask.id) {
+      setToast("Re-enable this project before starting a focus session.");
+      return;
+    }
     if (!nextTask) {
       setFocusTask(null);
       setFocusPickerOpen(true);
@@ -1495,7 +1543,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       setFocusOpen(true);
       return;
     }
-    setFocusTask((current) => current && !current.completed ? current : openTasks[0] ?? null);
+    setFocusTask((current) => current && openTasks.some((task) => task.id === current.id) ? current : openTasks[0] ?? null);
     setFocusOpen(false);
     setFocusPickerOpen(true);
   }
@@ -1520,6 +1568,10 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       return;
     }
     if (!focusTask) return;
+    if (projects.some((project) => project.name === focusTask.project && project.disabled)) {
+      setToast("Re-enable this project before starting a focus session.");
+      return;
+    }
     completingSession.current = null;
     setFocusTimer(startFocusTimer(focusTask, focusTimer.remainingSeconds || DEFAULT_FOCUS_SECONDS));
   }
@@ -1585,7 +1637,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             <Link
               href={projectFilterHref("/projects", projectFilter)}
               className="section-label-link"
-              aria-label="View all projects"
+              aria-label="View all projects / priorities"
               aria-current={activeView === "projects" && !activeProjectId ? "page" : undefined}
               onClick={() => {
                 setActiveView("projects");
@@ -1593,12 +1645,12 @@ export default function Home({ initialView = "today", initialProjectId = null, i
                 setMobileMenuOpen(false);
               }}
             >
-              Projects
+              Projects / Priorities
             </Link>
             <button type="button" onClick={openNewProject} aria-label="Add project"><Plus size={15} /></button>
           </div>
-          <div className="sidebar-project-list" aria-label={`All ${projects.length} projects`}>
-            {projects.map((project) => (
+          <div className="sidebar-project-list" aria-label={`${enabledProjects.length} active projects / priorities`}>
+            {enabledProjects.map((project) => (
               <button className={activeProjectId === project.id ? "project-link active" : "project-link"} key={project.id} onClick={() => navigateProject(project)}>
                 <span className="project-dot" style={{ background: project.color }} />
                 <span>{project.name}</span>
@@ -1654,19 +1706,22 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             </div>
             <div className="heading-actions">
               <button className="secondary-button" type="button" onClick={() => setShowSearch(true)}><Search size={17} /> Search</button>
-              {activeProject && <button className="primary-button" type="button" onClick={openNewTask}><Plus size={17} /> Add task</button>}
+              {activeProject && <button className="secondary-button" type="button" onClick={() => toggleProjectDisabled(activeProject)}>{activeProject.disabled ? <Play size={17} /> : <Pause size={17} />}{activeProject.disabled ? "Re-enable project" : "Disable project"}</button>}
+              {activeProject && !activeProject.disabled && <button className="primary-button" type="button" onClick={openNewTask}><Plus size={17} /> Add task</button>}
               {activeView === "mindMap" && <button className="primary-button" type="button" onClick={openNewTask}><Plus size={17} /> Add task</button>}
               {activeView === "goals" && <button className="primary-button" type="button" onClick={openNewGoal}><Plus size={17} /> New goal</button>}
               <button className="focus-button" type="button" onClick={openFocusPicker}><Zap size={17} fill="currentColor" /> {focusTimer.status === "idle" ? "Start focus" : `Focus · ${timeLabel(secondsLeft)}`} <kbd>F</kbd></button>
             </div>
           </section>
 
-          {activeView !== "timerHistory" && activeView !== "goals" && !isWorkTrackingView && (
+          {activeProject?.disabled && <div className="project-disabled-notice" role="status"><Pause size={18} /><p><strong>This project is disabled.</strong> Its tasks and history are saved. Re-enable it to include its tasks in active planning again.</p></div>}
+
+          {activeView !== "timerHistory" && activeView !== "goals" && !isWorkTrackingView && !activeProject?.disabled && (
             <form className="quick-capture" onSubmit={addQuickTask}>
               <span className="quick-capture-icon"><Sparkles size={18} /></span>
               <div className="quick-capture-field">
                 <input id="orbit-quick-add" value={quickAdd} onChange={(event) => setQuickAdd(event.target.value)} placeholder="Quick add: Prepare report tomorrow 2pm p1 @client 45m #stakeholder-comms" aria-label="Quick add a task with natural language" />
-                <QuickAddPreview input={quickAdd} projects={projects} />
+                <QuickAddPreview input={quickAdd} projects={enabledProjects} />
               </div>
               <kbd>⌘K</kbd>
               <button type="submit" disabled={!quickAdd.trim()}><Plus size={16} /> Add</button>
@@ -1675,8 +1730,8 @@ export default function Home({ initialView = "today", initialProjectId = null, i
 
           {taskFiltersVisible && (
             <TaskFilterBar
-              tasks={tasks}
-              projects={projects}
+              tasks={taskViewTasks}
+              projects={activeView === "completed" || activeProject ? projects : enabledProjects}
               priority={priorityFilter}
               project={projectFilter}
               status={statusFilter}
@@ -1723,7 +1778,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           </div>}
           {["inbox", "upcoming", "planner", "completed"].includes(activeView) && taskLayout === "sheet" && <TaskSheet
             tasks={visibleTasks.filter(task => activeView === "completed" ? task.completed : !task.completed)}
-            projects={projects} title={`${VIEW_TITLES[activeView].title} task sheet`}
+            projects={enabledProjects} title={`${VIEW_TITLES[activeView].title} task sheet`}
             groupByDue={activeView === "upcoming" || activeView === "planner"} planner={activeView === "planner"}
             empty={activeView === "completed" ? "Complete a task and it will appear here, with its completion date." : undefined}
             onAdd={openNewTask} onEdit={openEditTask} onStatusChange={moveTask} onCellChange={updateTaskCell}
@@ -1732,12 +1787,12 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           {activeView === "planner" && taskLayout === "original" && <PlannerView tasks={visibleTasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "mindMap" && <MindMapView goals={goals} tasks={tasks} onEditTask={openEditTaskById} onCreateGoal={openNewGoal} />}
           {activeView === "goals" && <GoalsView goals={goals} tasks={tasks} onCreateGoal={openNewGoal} onEditGoal={openEditGoal} onDeleteGoal={deleteGoal} onAddTask={openNewTaskForGoal} onEditTask={openEditTaskById} />}
-          {activeView === "filtersLabels" && <FiltersLabelsView tasks={tasks} projects={projects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "filtersLabels" && <FiltersLabelsView tasks={activeTasks} projects={enabledProjects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "inbox" && taskLayout === "original" && <ListView tasks={visibleTasks.filter((task) => !task.completed)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
           {activeView === "completed" && taskLayout === "original" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
             ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="This project is ready for its first task." />
-            : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} />)}
+            : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} onToggleProject={toggleProjectDisabled} />)}
           {activeView === "analytics" && <AnalyticsView tasks={tasks} focusHistory={focusHistory} karma={karma} dailyGoal={dailyGoal} onGoalChange={updateDailyGoal} />}
           {activeView === "timerHistory" && <TimerHistoryView focusHistory={focusHistory} search={search} now={clockNow} />}
           {activeView === "actuals" && <ActualsView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
@@ -1760,7 +1815,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             <div className="modal-header"><div><p className="eyebrow">{editingTask ? "Refine the plan" : "Capture what matters"}</p><h2>{editingTask ? "Edit task" : "New task"}</h2></div><button className="icon-button" type="button" onClick={() => setTaskModalOpen(false)} aria-label="Close"><X size={20} /></button></div>
             <label className="field-label">Task name<input autoFocus value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="What needs to move forward?" required /></label>
             <div className="form-grid">
-              <label className="field-label">Project<select value={draft.project} onChange={(event) => setDraft({ ...draft, project: event.target.value })}>{projects.map((project) => <option key={project.id}>{project.name}</option>)}</select></label>
+              <label className="field-label">Project / Priority<select value={draft.project} onChange={(event) => setDraft({ ...draft, project: event.target.value })}>{projects.filter((project) => !project.disabled || (editingTask && project.name === draft.project)).map((project) => <option key={project.id} value={project.name} disabled={project.disabled}>{project.name}{project.disabled ? " (disabled)" : ""}</option>)}</select></label>
               <label className="field-label">Priority<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Priority })}><option>Very High</option><option>High</option><option>Medium</option><option>Low</option></select></label>
               <label className="field-label">Due<select value={draft.due} onChange={(event) => setDraft({ ...draft, due: event.target.value })}><option>Today</option><option>Tomorrow</option><option>Friday</option><option>Monday</option><option>Next week</option><option>Next month</option><option>Someday</option></select></label>
               <label className="field-label">Time<input value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label>
@@ -1912,16 +1967,17 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           commands={[
             { id: "new-task", title: "New task", hint: "Open the full task form", icon: Plus, keywords: "add create task", run: openNewTask },
             { id: "new-project", title: "New project", hint: "Start a new outcome", icon: Folder, keywords: "add create project", run: openNewProject },
+            { id: "view-projects", title: "Projects / Priorities", hint: "Manage active and disabled projects", icon: Folder, keywords: "projects priorities disabled re-enable", run: () => navigate("projects") },
             { id: "new-goal", title: "New goal", hint: "Connect work to an outcome", icon: Target, keywords: "add create goal outcome", run: openNewGoal },
             { id: "focus", title: "Start focus session", hint: "25 minutes of deep work", icon: Zap, keywords: "timer pomodoro deep work", run: openFocusPicker },
             { id: "theme", title: `Switch to ${theme === "dark" ? "light" : "dark"} mode`, hint: "Toggle the theme", icon: theme === "dark" ? Sun : Moon, keywords: "theme dark light appearance", run: toggleTheme },
             ...navItems.map((item) => ({ id: `view-${item.view}`, title: `Go to ${item.label}`, hint: "View", icon: item.icon, keywords: `view navigate ${item.label}`, run: () => navigate(item.view) })),
-            ...projects.map((project) => ({ id: `project-${project.id}`, title: project.name, hint: "Open project", icon: Folder, keywords: `project open ${project.name}`, run: () => navigateProject(project) })),
+            ...projects.map((project) => ({ id: `project-${project.id}`, title: project.name, hint: project.disabled ? "Disabled project" : "Open project", icon: Folder, keywords: `project open ${project.name}`, run: () => navigateProject(project) })),
           ]}
         />
       )}
 
-      {toast && <div className="toast"><CheckCircle2 size={18} />{toast}</div>}
+      {toast && <div className="toast" role="status"><CheckCircle2 size={18} />{toast}</div>}
     </div>
   );
 }
@@ -2337,9 +2393,17 @@ function TaskActions({ task, onEdit, onFocus }: { task: Task; onEdit: (task: Tas
   );
 }
 
-function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenameProject, onDeleteProject }: { tasks: Task[]; projects: Project[]; onCreateProject: () => void; onOpenProject: (project: Project) => void; onRenameProject: (project: Project) => void; onDeleteProject: (project: Project) => void }) {
+function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenameProject, onDeleteProject, onToggleProject }: { tasks: Task[]; projects: Project[]; onCreateProject: () => void; onOpenProject: (project: Project) => void; onRenameProject: (project: Project) => void; onDeleteProject: (project: Project) => void; onToggleProject: (project: Project) => void }) {
   const [layout, setLayout] = useState<"list" | "grid">("list");
-  const projectStats = projects.map((project) => {
+  const [status, setStatus] = useState<"all" | "active" | "disabled">("all");
+  const activeCount = projects.filter((project) => !project.disabled).length;
+  const disabledCount = projects.length - activeCount;
+  const statusFilters = [
+    { value: "all", label: "All", count: projects.length },
+    { value: "active", label: "Active", count: activeCount },
+    { value: "disabled", label: "Disabled", count: disabledCount },
+  ] as const;
+  const projectStats = projects.filter((project) => status === "all" || (status === "disabled" ? project.disabled : !project.disabled)).map((project) => {
     const projectTasks = tasks.filter((task) => task.project === project.name);
     const completed = projectTasks.filter((task) => task.completed).length;
     return {
@@ -2355,7 +2419,7 @@ function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenam
       <div className="projects-toolbar">
         <div>
           <p className="eyebrow">Portfolio overview</p>
-          <h2>{projects.length} active projects</h2>
+          <h2>{activeCount} active · {disabledCount} disabled</h2>
         </div>
         <div className="projects-toolbar-actions">
           <button className="primary-button" type="button" onClick={onCreateProject}><Plus size={16} /> New project</button>
@@ -2366,13 +2430,22 @@ function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenam
         </div>
       </div>
 
+      <div className="project-status-toolbar">
+        <div className="project-view-switch" role="group" aria-label="Project status">
+          {statusFilters.map((filter) => <button key={filter.value} type="button" className={status === filter.value ? "active" : ""} aria-pressed={status === filter.value} onClick={() => setStatus(filter.value)}>{filter.label} ({filter.count})</button>)}
+        </div>
+        <p>Disabled projects keep every task and stay out of active planning.</p>
+      </div>
+
+      {projectStats.length === 0 && <div className="empty-list"><Folder size={30} /><h3>{status === "disabled" ? "No disabled projects" : status === "active" ? "No active projects" : "No projects yet"}</h3><p>{status === "disabled" ? "Projects you disable will appear here, ready to re-enable." : "Create a project or re-enable one from the All view."}</p></div>}
+
       {layout === "list" ? (
-        <section className="project-list" aria-label="Projects list">
+        <section className="project-list" aria-label="Projects / Priorities list">
           {projectStats.map((project) => (
-            <article className="project-list-row" key={project.id}>
+            <article className={`project-list-row${project.disabled ? " project-disabled" : ""}`} key={project.id}>
               <button className="project-list-main" type="button" onClick={() => onOpenProject(project)}>
                 <span className="project-list-icon" style={{ background: `${project.color}18`, color: project.color }}><Folder size={20} /></span>
-                <span className="project-list-copy"><strong>{project.name}</strong><small>{project.description}</small></span>
+                <span className="project-list-copy"><strong>{project.name}</strong><small>{project.description}</small><span className={`project-status-badge${project.disabled ? " disabled" : ""}`}>{project.disabled ? "Disabled" : "Active"}</span></span>
               </button>
               <div className="project-list-metrics">
                 <span><strong>{project.openCount}</strong><small>Open</small></span>
@@ -2382,20 +2455,22 @@ function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenam
                 <div><span>Progress</span><strong>{project.percent}%</strong></div>
                 <i><span style={{ width: `${project.percent}%`, background: project.color }} /></i>
               </div>
-              <div className="project-list-actions"><button className="project-list-delete" type="button" onClick={() => onDeleteProject(project)} aria-label={`Delete ${project.name}`}><Trash2 size={16} /></button><button className="project-list-edit" type="button" onClick={() => onRenameProject(project)} aria-label={`Rename ${project.name}`}><Pencil size={16} /></button><button className="project-list-open" type="button" onClick={() => onOpenProject(project)} aria-label={`Open ${project.name}`}><ArrowRight size={17} /></button></div>
+              <div className="project-list-actions"><button className="project-lifecycle-button" type="button" onClick={() => { onToggleProject(project); if (status !== "all") setStatus("all"); }} aria-label={`${project.disabled ? "Re-enable" : "Disable"} ${project.name}`}>{project.disabled ? <Play size={13} /> : <Pause size={13} />}{project.disabled ? "Re-enable" : "Disable"}</button><button className="project-list-delete" type="button" onClick={() => onDeleteProject(project)} aria-label={`Delete ${project.name}`}><Trash2 size={16} /></button><button className="project-list-edit" type="button" onClick={() => onRenameProject(project)} aria-label={`Rename ${project.name}`}><Pencil size={16} /></button><button className="project-list-open" type="button" onClick={() => onOpenProject(project)} aria-label={`Open ${project.name}`}><ArrowRight size={17} /></button></div>
             </article>
           ))}
         </section>
       ) : (
-        <section className="project-grid">
+        <section className="project-grid" aria-label="Projects / Priorities grid">
           {projectStats.map((project, index) => (
-            <article className={`project-card project-${index + 1}`} key={project.id}>
+            <article className={`project-card project-${index + 1}${project.disabled ? " project-disabled" : ""}`} key={project.id}>
               <div className="project-card-top"><span className="project-symbol"><Folder size={21} /></span><div className="project-card-actions"><button className="project-card-delete" type="button" onClick={() => onDeleteProject(project)} aria-label={`Delete ${project.name}`}><Trash2 size={17} /></button><button type="button" onClick={() => onRenameProject(project)} aria-label={`Rename ${project.name}`}><Pencil size={18} /></button></div></div>
               <p className="eyebrow">{project.taskCount} tasks</p>
+              <span className={`project-status-badge${project.disabled ? " disabled" : ""}`}>{project.disabled ? "Disabled" : "Active"}</span>
               <h2>{project.name}</h2>
               <p>{project.description}</p>
               <div className="project-progress"><div><span>Progress</span><strong>{project.percent}%</strong></div><i><span style={{ width: `${project.percent}%`, background: project.color }} /></i></div>
               <button className="project-open" type="button" onClick={() => onOpenProject(project)}>Open project <ArrowRight size={16} /></button>
+              <button className="project-lifecycle-button" type="button" onClick={() => { onToggleProject(project); if (status !== "all") setStatus("all"); }} aria-label={`${project.disabled ? "Re-enable" : "Disable"} ${project.name}`}>{project.disabled ? <Play size={14} /> : <Pause size={14} />}{project.disabled ? "Re-enable" : "Disable"}</button>
             </article>
           ))}
         </section>

@@ -484,6 +484,21 @@ kbd { font-family: inherit; }
 .projects-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 16px; }
 .projects-toolbar h2 { margin: 0; font-size: 20px; letter-spacing: -.03em; }
 .projects-toolbar-actions { display: flex; align-items: center; gap: 10px; }
+.project-status-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 18px; }
+.project-status-toolbar p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.project-status-badge { display: inline-flex; align-items: center; width: fit-content; padding: 3px 8px; border-radius: 20px; background: var(--blue-soft); color: var(--blue); font-size: 10px; font-weight: 700; }
+.project-status-badge.disabled { background: var(--line); color: var(--ink); }
+.project-disabled { border-style: dashed; }
+.project-card > .project-status-badge { margin-bottom: 10px; }
+.project-lifecycle-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); color: var(--ink); font-size: 11px; font-weight: 650; }
+.project-lifecycle-button:hover { border-color: var(--blue); color: var(--blue); }
+.project-list-actions { flex-wrap: wrap; }
+.project-list-actions .project-lifecycle-button { flex-basis: 100%; }
+.project-card > .project-lifecycle-button { margin-top: 14px; }
+.project-disabled-notice { display: flex; align-items: center; gap: 12px; padding: 14px 18px; margin-bottom: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink); }
+.project-disabled-notice svg { flex: 0 0 auto; }
+.project-disabled-notice p { margin: 0; font-size: 12px; line-height: 1.6; }
+.project-lifecycle-button:focus-visible, .project-status-toolbar button:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
 .project-view-switch { display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.72); }
 .project-view-switch button { height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 11px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 700; }
 .project-view-switch button:hover { color: var(--ink); }
