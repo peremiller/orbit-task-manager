@@ -1682,13 +1682,13 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             <button type="button" onClick={openNewProject} aria-label="Add project"><Plus size={15} /></button>
           </div>
           <div className="sidebar-project-list" aria-label={`${enabledProjects.length} active projects / priorities`}>
-            {groupProjectsByCategory(enabledProjects).map(group => <details className="sidebar-project-category" key={group.name} open><summary><span>{group.name}</span><small>{group.projects.length}</small></summary>{group.projects.map((project) => (
+            {groupProjectsByCategory(enabledProjects).map(group => <details className="sidebar-project-category" key={group.name} open={group.projects.some(project => project.id === activeProject?.id)}><summary><Folder size={14} /><span>{group.name}</span><small>{group.projects.length}</small></summary><div className="sidebar-category-children">{group.projects.map((project) => (
               <button className={activeProject?.id === project.id ? "project-link active" : "project-link"} key={project.id} onClick={() => navigateProject(project)}>
                 <span className="project-dot" style={{ background: project.color }} />
                 <span>{project.name}</span>
                 <em>{tasks.filter((task) => task.project === project.name && isActionableTask(task)).length}</em>
               </button>
-            ))}</details>)}
+            ))}</div></details>)}
           </div>
         </div>
 
