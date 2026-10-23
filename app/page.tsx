@@ -77,6 +77,8 @@ import { changeTaskStatus, isActionableTask, TASK_STATUS_LABELS, type TaskStatus
 import { TaskSheet, type TaskCellPatch } from "./task-sheet";
 import { BackToTop } from "./back-to-top";
 
+const InboxOrbitPanel = dynamic(() => import("./inbox-orbit-panel").then(module => module.InboxOrbitPanel), { loading: () => <aside className="inbox-orbit-panel" aria-label="Inbox circular orbit"><p role="status">Loading circular orbit…</p></aside> });
+
 const ProjectProgressView = dynamic(() => import("./project-progress-view").then((module) => module.ProjectProgressView), { loading: () => <p role="status">Loading project progress…</p> });
 
 type Priority = "Very High" | "High" | "Medium" | "Low";
@@ -1026,6 +1028,8 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     return filterTasks(taskViewTasks, { search, priority: priorityFilter, projects: effectiveProjectFilter, status: statusFilter, due: dueFilter, label: labelFilter });
   }, [dueFilter, effectiveProjectFilter, labelFilter, priorityFilter, search, statusFilter, taskViewTasks]);
 
+  const inboxOrbitTasks = useMemo(() => activeView === "inbox" ? filterTasks(activeTasks, { search, priority: priorityFilter, projects: effectiveProjectFilter, status: "All", due: dueFilter, label: labelFilter }) : [], [activeView, activeTasks, search, priorityFilter, effectiveProjectFilter, dueFilter, labelFilter]);
+
   const inboxPriorityProjects = useMemo<PriorityProjectFilter[]>(() => {
     if (activeView !== "inbox" || priorityFilter === "All") return [];
 
@@ -1809,10 +1813,9 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             <button type="button" aria-pressed={taskLayout === "sheet"} onClick={() => setTaskLayout("sheet")}><Rows3 size={16} />Sheet</button>
             <button type="button" aria-pressed={taskLayout === "original"} onClick={() => setTaskLayout("original")}><LayoutGrid size={16} />{activeView === "upcoming" ? "Timeline" : activeView === "planner" ? "Capacity" : "List"}</button>
           </div>}
-          {["inbox", "upcoming", "planner", "completed"].includes(activeView) && taskLayout === "sheet" && <TaskSheet
+          {["upcoming", "planner", "completed"].includes(activeView) && taskLayout === "sheet" && <TaskSheet
             tasks={visibleTasks.filter(inTaskList)}
             projects={enabledProjects} title={`${VIEW_TITLES[activeView].title} task sheet`}
-            parentCategories={activeView === "inbox" ? new Map(projects.map(project => [project.name, projectCategory(project)])) : undefined}
             groupByDue={activeView === "upcoming" || activeView === "planner"} planner={activeView === "planner"}
             empty={activeView === "completed" ? "Complete a task and it will appear here, with its completion date." : undefined}
             onAdd={openNewTask} onEdit={openEditTask} onStatusChange={moveTask} onCellChange={updateTaskCell}
@@ -1822,7 +1825,14 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           {activeView === "mindMap" && <MindMapView goals={goals} tasks={tasks} onEditTask={openEditTaskById} onCreateGoal={openNewGoal} />}
           {activeView === "goals" && <GoalsView goals={goals} tasks={tasks} onCreateGoal={openNewGoal} onEditGoal={openEditGoal} onDeleteGoal={deleteGoal} onAddTask={openNewTaskForGoal} onEditTask={openEditTaskById} />}
           {activeView === "filtersLabels" && <FiltersLabelsView tasks={activeTasks} projects={enabledProjects} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
-          {activeView === "inbox" && taskLayout === "original" && <ListView tasks={visibleTasks.filter(inTaskList)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}
+          {activeView === "inbox" && <div className="inbox-orbit-layout">
+            <div className="inbox-task-content">{taskLayout === "sheet" ? <TaskSheet
+              tasks={visibleTasks.filter(inTaskList)} projects={enabledProjects} title="Inbox task sheet"
+              parentCategories={new Map(projects.map(project => [project.name, projectCategory(project)]))}
+              onAdd={openNewTask} onEdit={openEditTask} onStatusChange={moveTask} onCellChange={updateTaskCell}
+            /> : <ListView tasks={visibleTasks.filter(inTaskList)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}</div>
+            <InboxOrbitPanel tasks={inboxOrbitTasks} projects={enabledProjects} onOpenProgress={() => openProjectProgress()} />
+          </div>}
           {activeView === "completed" && taskLayout === "original" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
             ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="This project is ready for its first task." />
