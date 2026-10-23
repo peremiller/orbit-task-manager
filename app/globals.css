@@ -1724,3 +1724,6 @@ kbd { font-family: inherit; }
 .progress-orbit-least-ring { fill: none; stroke: var(--ink); stroke-width: 1.5px; stroke-dasharray: 4 4; }
 .progress-orbit-compact .progress-orbit-least { padding: 8px 10px; font-size: 10px; }
 .inbox-status-orbit .progress-orbit-map { max-height: none; height: auto; aspect-ratio: 1; }
+
+.task-parent-category-filter { min-width: 0; }
+.task-parent-category-filter select { text-overflow: ellipsis; }

@@ -38,7 +38,7 @@ Project Progress defaults to 2x Timeline, with Bundles, Timeline, 3x Timeline an
 
 ## Circular Orbit and date ranges
 
-Circular Orbit shows completed-task counts and shares by parent category, with larger category nodes, stronger connections, a numbered category key and a strongest-pull summary. Every category remains visible, including those with no completions. Ties are identified. The key is keyboard accessible; selecting a category scopes the charts, detail and export through the existing filters. The view uses the same exact counts as the timelines, without inferring task duration, priority or scheduled work. Undated, future and N/A completions are excluded.
+Circular Orbit shows completed-task counts and shares by parent category, with larger category nodes, stronger connections, a category key and a strongest-pull summary. Every category remains visible, including those with no completions. Ties are identified. The key is keyboard accessible; selecting a category scopes the charts, detail and export through the existing filters. The view uses the same exact counts as the timelines, without inferring task duration, priority or scheduled work. Undated, future and N/A completions are excluded.
 
 Day and Date range join Week, Month, Quarter and Year in the period controls. Custom ranges are inclusive and use Manila completion dates. The reference/start date moves the end forward when needed; the end date cannot precede the start. Previous/Next moves by a full inclusive custom range. All five views share these selections. 2x Timeline remains the initial default.
 
@@ -51,3 +51,5 @@ Complete defaults to All time, including undated completions. Its day, inclusive
 Every orbit labels its nodes with the full parent-category name, wrapping long names beneath the task count. Least pull identifies the minimum category count, including zero-task categories and all ties. Dashed node outlines and category-key notes identify the same minimum categories. This applies to Project Progress and all three Inbox status orbits.
 
 The Inbox orbit panel and expanded category keys grow to their natural height with the page. Viewport-height caps and nested list scrolling are removed so category content and the Complete orbit remain reachable without clipping.
+
+Inbox includes a Parent category dropdown in its main task-filter bar. It shares selection with the orbit panel, scopes Sheet/List tasks, priority project pills, project choices and all three orbits, and combines with existing search and task filters. Changing the category clears selected projects to avoid stale cross-category combinations; Clear resets it to all categories. The selection applies only to Inbox, and stale/renamed categories fall back to All. Matching-task counts retain the full Inbox denominator.

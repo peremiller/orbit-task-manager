@@ -62,7 +62,7 @@ import {
 import { computeKarma, clampDailyGoal, KARMA_LEVELS, type KarmaStats } from "@/lib/karma";
 import { filterTasks, normalizeProjectFilterQuery, projectFilterHref } from "@/lib/task-filters";
 import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-recovery";
-import { applyProjectCategoryAssignments, groupProjectsByCategory, initializeProjectCategories, PROJECT_CATEGORIES, projectCategory, projectCategoryNames, suggestProjectCategory, mergeProjects, projectForId, remapMergedTaskProjects, tasksForEnabledProjects, type Project, type ProjectMergeRequest, type ProjectCategoryAssignment } from "@/lib/projects";
+import { filterProjectCategory, applyProjectCategoryAssignments, groupProjectsByCategory, initializeProjectCategories, PROJECT_CATEGORIES, projectCategory, projectCategoryNames, suggestProjectCategory, mergeProjects, projectForId, remapMergedTaskProjects, tasksForEnabledProjects, type Project, type ProjectMergeRequest, type ProjectCategoryAssignment } from "@/lib/projects";
 import { ProjectMergeDialog } from "./project-merge-dialog";
 import { ProjectCategoriesDialog } from "./project-categories-dialog";
 import { ProjectsView } from "./projects-view";
@@ -74,6 +74,7 @@ import { KanbanView } from "./kanban-view";
 import { DEFAULT_KANBAN_COLUMNS, normalizeKanbanColumns, taskColumnId, type KanbanColumn } from "@/lib/kanban";
 import type { TaskAttachment } from "@/lib/task-attachments";
 import { changeTaskStatus, isActionableTask, TASK_STATUS_LABELS, type TaskStatus } from "@/lib/task-status";
+import { progressProjects } from "@/lib/project-progress";
 import { TaskSheet, type TaskCellPatch } from "./task-sheet";
 import { BackToTop } from "./back-to-top";
 
@@ -522,6 +523,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [dueFilter, setDueFilter] = useState("All");
   const [labelFilter, setLabelFilter] = useState("All");
+  const [inboxParentCategory, setInboxParentCategory] = useState("");
   const [quickAdd, setQuickAdd] = useState("");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -1023,17 +1025,21 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const karma = useMemo(() => computeKarma(tasks, dailyGoal, new Date(clockNow)), [clockNow, dailyGoal, tasks]);
 
   // Keep disabled-project tasks accessible in their workspace and in completion history.
-  const taskViewTasks = activeView === "completed" || activeProjectId ? tasks : activeTasks;
+  const inboxProjectChoices = useMemo(() => progressProjects(activeTasks, enabledProjects), [activeTasks, enabledProjects]);
+  const inboxParentCategories = useMemo(() => projectCategoryNames(inboxProjectChoices), [inboxProjectChoices]);
+  const selectedParentCategory = activeView === "inbox" && inboxParentCategories.includes(inboxParentCategory) ? inboxParentCategory : "";
+  const inboxCategoryScope = useMemo(() => filterProjectCategory(activeTasks, inboxProjectChoices, selectedParentCategory), [activeTasks, inboxProjectChoices, selectedParentCategory]);
+  const taskViewTasks = activeView === "inbox" ? inboxCategoryScope.tasks : activeView === "completed" || activeProjectId ? tasks : activeTasks;
   const visibleTasks = useMemo(() => {
     return filterTasks(taskViewTasks, { search, priority: priorityFilter, projects: effectiveProjectFilter, status: statusFilter, due: dueFilter, label: labelFilter });
   }, [dueFilter, effectiveProjectFilter, labelFilter, priorityFilter, search, statusFilter, taskViewTasks]);
 
-  const inboxOrbitTasks = useMemo(() => activeView === "inbox" ? filterTasks(activeTasks, { search, priority: priorityFilter, projects: effectiveProjectFilter, status: "All", due: dueFilter, label: labelFilter }) : [], [activeView, activeTasks, search, priorityFilter, effectiveProjectFilter, dueFilter, labelFilter]);
+  const inboxOrbitTasks = useMemo(() => activeView === "inbox" ? filterTasks(inboxCategoryScope.tasks, { search, priority: priorityFilter, projects: effectiveProjectFilter, status: "All", due: dueFilter, label: labelFilter }) : [], [activeView, inboxCategoryScope.tasks, search, priorityFilter, effectiveProjectFilter, dueFilter, labelFilter]);
 
   const inboxPriorityProjects = useMemo<PriorityProjectFilter[]>(() => {
     if (activeView !== "inbox" || priorityFilter === "All") return [];
 
-    const matchingTasks = filterTasks(activeTasks, {
+    const matchingTasks = filterTasks(inboxCategoryScope.tasks, {
       search,
       priority: priorityFilter,
       projects: [],
@@ -1057,7 +1063,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       .map(([name, count]) => ({ name, color: "#7b8494", count }));
 
     return [...knownProjects, ...unmatchedProjects];
-  }, [activeView, activeTasks, dueFilter, labelFilter, priorityFilter, projects, search, statusFilter]);
+  }, [activeView, inboxCategoryScope.tasks, dueFilter, labelFilter, priorityFilter, projects, search, statusFilter]);
 
   const inTaskList = (task: Task) => activeView === "completed" ? task.completed : activeView === "inbox" || statusFilter === "na" ? !task.completed : isActionableTask(task);
   const openTasks = activeTasks.filter((task) => isActionableTask(task));
@@ -1076,7 +1082,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const isWorkTrackingView = activeView === "actuals" || activeView === "effortPlan" || activeView === "timesheetReport" || activeView === "workDashboard" || activeView === "selectionManager";
   const canEditSelectionManager = sessionUser?.canEditSelectionManager === true;
   const taskFiltersVisible = !isWorkTrackingView && activeView !== "projectProgress" && activeView !== "analytics" && activeView !== "timerHistory" && activeView !== "filtersLabels" && activeView !== "mindMap" && activeView !== "goals" && (activeView !== "projects" || Boolean(activeProject));
-  const activeFilterCount = [search.trim(), projectFilter.length > 0, priorityFilter !== "All", statusFilter !== "All", dueFilter !== "All", labelFilter !== "All"].filter(Boolean).length;
+  const activeFilterCount = [search.trim(), projectFilter.length > 0, priorityFilter !== "All", statusFilter !== "All", dueFilter !== "All", labelFilter !== "All", Boolean(selectedParentCategory)].filter(Boolean).length;
   const viewTaskCount = activeProject
     ? visibleTasks.filter((task) => task.project === activeProject.name).length
     : activeView === "inbox" || activeView === "upcoming" || activeView === "planner"
@@ -1084,9 +1090,9 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         : activeView === "completed"
           ? visibleTasks.filter((task) => task.completed).length
           : visibleTasks.length;
-  const totalViewTaskCount = activeProject
+  const totalViewTaskCount = activeView === "inbox" ? activeTasks.filter(inTaskList).length : activeProject
     ? tasks.filter((task) => task.project === activeProject.name).length
-    : activeView === "inbox" || activeView === "upcoming" || activeView === "planner"
+    : activeView === "upcoming" || activeView === "planner"
         ? taskViewTasks.filter(inTaskList).length
         : activeView === "completed"
           ? tasks.filter((task) => task.completed).length
@@ -1111,6 +1117,12 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     setStatusFilter("All");
     setDueFilter("All");
     setLabelFilter("All");
+    setInboxParentCategory("");
+  }
+
+  function changeInboxParentCategory(value: string) {
+    setInboxParentCategory(value);
+    changeProjectFilter([]);
   }
 
   function changeProjectFilter(nextProjects: string[]) {
@@ -1768,7 +1780,10 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           {taskFiltersVisible && (
             <TaskFilterBar
               tasks={taskViewTasks}
-              projects={activeView === "completed" || activeProject ? projects : enabledProjects}
+              projects={activeView === "inbox" ? inboxCategoryScope.projects : activeView === "completed" || activeProject ? projects : enabledProjects}
+              parentCategories={activeView === "inbox" ? inboxParentCategories : undefined}
+              parentCategory={selectedParentCategory}
+              onParentCategoryChange={changeInboxParentCategory}
               priority={priorityFilter}
               project={effectiveProjectFilter}
               status={statusFilter}
@@ -1831,7 +1846,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
               parentCategories={new Map(projects.map(project => [project.name, projectCategory(project)]))}
               onAdd={openNewTask} onEdit={openEditTask} onStatusChange={moveTask} onCellChange={updateTaskCell}
             /> : <ListView tasks={visibleTasks.filter(inTaskList)} projects={projects} title="Everything on your radar" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} />}</div>
-            <InboxOrbitPanel tasks={inboxOrbitTasks} projects={enabledProjects} onOpenProgress={() => openProjectProgress()} />
+            <InboxOrbitPanel tasks={inboxOrbitTasks} projects={inboxProjectChoices} category={selectedParentCategory} onCategoryChange={changeInboxParentCategory} onOpenProgress={() => openProjectProgress()} />
           </div>}
           {activeView === "completed" && taskLayout === "original" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
@@ -2034,9 +2049,12 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   );
 }
 
-function TaskFilterBar({ tasks, projects, priority, project, status, due, label, resultCount, totalCount, activeCount, showProjectFilter, showPriorityProjectPills, priorityProjects, onPriorityChange, onProjectChange, onStatusChange, onDueChange, onLabelChange, onClear }: {
+function TaskFilterBar({ tasks, projects, parentCategories, parentCategory, onParentCategoryChange, priority, project, status, due, label, resultCount, totalCount, activeCount, showProjectFilter, showPriorityProjectPills, priorityProjects, onPriorityChange, onProjectChange, onStatusChange, onDueChange, onLabelChange, onClear }: {
   tasks: Task[];
   projects: Project[];
+  parentCategories?: string[];
+  parentCategory?: string;
+  onParentCategoryChange?: (value: string) => void;
   priority: "All" | Priority;
   project: string[];
   status: StatusFilter;
@@ -2079,6 +2097,7 @@ function TaskFilterBar({ tasks, projects, priority, project, status, due, label,
           {activeCount > 0 && <em aria-label={`${activeCount} active filters`}>{activeCount}</em>}
         </div>
         <div className="task-filter-fields">
+          {parentCategories && <label className="task-filter-control task-parent-category-filter"><span>Parent category</span><select aria-label="Inbox parent category" value={parentCategory ?? ""} onChange={event => onParentCategoryChange?.(event.target.value)}><option value="">All parent categories</option>{parentCategories.map(name => <option key={name}>{name}</option>)}</select></label>}
           <label className="task-filter-control">
             <span>Priority</span>
             <select value={priority} onChange={(event) => onPriorityChange(event.target.value as "All" | Priority)}>

@@ -8,11 +8,10 @@ import { buildInboxOrbits } from "@/lib/inbox-orbits";
 import { ProjectProgressOrbit } from "./project-progress-orbit";
 import type { Task } from "./page";
 
-export function InboxOrbitPanel({ tasks, projects, onOpenProgress }: { tasks: Task[]; projects: Project[]; onOpenProgress: () => void }) {
+export function InboxOrbitPanel({ tasks, projects, onOpenProgress, category, onCategoryChange }: { tasks: Task[]; projects: Project[]; onOpenProgress: () => void; category: string; onCategoryChange: (name: string) => void }) {
   const [period, setPeriod] = useState<ProgressPeriod | "all">("all");
   const [anchor, setAnchor] = useState(progressToday);
   const [rangeEnd, setRangeEnd] = useState(progressToday);
-  const [category, setCategory] = useState("");
   const today = progressToday();
   const choices = useMemo(() => progressProjects(tasks, projects), [tasks, projects]);
   const names = projectCategoryNames(choices);
@@ -36,13 +35,13 @@ export function InboxOrbitPanel({ tasks, projects, onOpenProgress }: { tasks: Ta
       <label>Complete period<select aria-label="Inbox orbit period" value={period} onChange={event => setPeriod(event.target.value as ProgressPeriod | "all")}><option value="all">All time</option><option value="day">Day</option><option value="range">Date range</option><option value="week">Week</option><option value="month">Month</option><option value="quarter">Quarter</option><option value="year">Year</option></select></label>
       {period !== "all" && <label>{period === "range" ? "Start date" : "Reference date"}<input type="date" aria-label="Inbox orbit reference date" value={anchor} onChange={event => { const value = event.target.value; if (/^\d{4}-\d{2}-\d{2}$/.test(value)) { setAnchor(value); if (value > rangeEnd) setRangeEnd(value); } }} /></label>}
       {period === "range" && <label>End date<input type="date" aria-label="Inbox orbit end date" min={anchor} value={rangeEnd} onChange={event => { const value = event.target.value; if (/^\d{4}-\d{2}-\d{2}$/.test(value) && value >= anchor) setRangeEnd(value); }} /></label>}
-      <label className="inbox-orbit-category">Parent category<select aria-label="Inbox orbit parent category" value={selectedCategory} onChange={event => setCategory(event.target.value)}><option value="">All categories</option>{names.map(name => <option key={name}>{name}</option>)}</select></label>
+      <label className="inbox-orbit-category">Parent category<select aria-label="Inbox orbit parent category" value={selectedCategory} onChange={event => onCategoryChange(event.target.value)}><option value="">All categories</option>{names.map(name => <option key={name}>{name}</option>)}</select></label>
     </div>
     {period !== "all" && <div className="inbox-orbit-navigation"><button type="button" className="icon-button" aria-label="Previous inbox orbit period" onClick={() => movePeriod(-1)}><ChevronLeft size={16} /></button><span aria-live="polite">{periodTitle}</span><button type="button" className="icon-button" aria-label="Next inbox orbit period" onClick={() => movePeriod(1)}><ChevronRight size={16} /></button><button type="button" className="secondary-button" onClick={() => { setAnchor(today); if (period === "range" || rangeEnd < today) setRangeEnd(today); }}>Today</button></div>}
-    {selectedCategory && <button type="button" className="inbox-orbit-reset" onClick={() => setCategory("")}>Show all categories</button>}
+    {selectedCategory && <button type="button" className="inbox-orbit-reset" onClick={() => onCategoryChange("")}>Show all categories</button>}
     <p className="inbox-orbit-scope">Open statuses show current task state. Complete: {periodTitle}. Inbox search, priority, project, due and label filters apply to all three.</p>
     {orbits.map(orbit => <section className="inbox-status-orbit" key={orbit.value} aria-label={`${orbit.label} task orbit`}>
-      <ProjectProgressOrbit categories={orbit.categories} periodTitle={orbit.value === "done" ? periodTitle : "Current workspace"} onSelectCategory={setCategory} compact statusLabel={orbit.label} />
+      <ProjectProgressOrbit categories={orbit.categories} periodTitle={orbit.value === "done" ? periodTitle : "Current workspace"} onSelectCategory={onCategoryChange} compact statusLabel={orbit.label} />
     </section>)}
     <p className="inbox-orbit-timezone">N/A tasks are excluded. Completion-date filters use {PROGRESS_TIME_ZONE}; All time includes undated completed tasks.</p>
   </aside>;
