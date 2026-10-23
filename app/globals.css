@@ -1675,7 +1675,7 @@ kbd { font-family: inherit; }
 .inbox-orbit-layout { display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 20px; align-items: start; max-width: 1800px; margin-inline: auto; }
 .inbox-task-content { min-width: 0; }
 .inbox-task-content > .list-card, .inbox-task-content .task-sheet-view { width: 100%; max-width: none; }
-.inbox-orbit-panel { min-width: 0; position: sticky; top: 22px; max-height: calc(100dvh - 44px); overflow-y: auto; padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); scrollbar-width: thin; }
+.inbox-orbit-panel { min-width: 0; position: static; max-height: none; overflow: visible; padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); scrollbar-width: thin; }
 .inbox-orbit-heading, .inbox-orbit-heading > div { display: flex; align-items: center; gap: 8px; }
 .inbox-orbit-heading { justify-content: space-between; color: var(--blue); }
 .inbox-orbit-heading h2 { margin: 0; color: var(--ink); font-size: 15px; }
@@ -1696,7 +1696,7 @@ kbd { font-family: inherit; }
 .progress-orbit-compact .progress-panel-heading p, .progress-orbit-compact .progress-timeline-note { font-size: 10px; }
 .progress-orbit-compact .progress-orbit-leader { padding: 9px 10px; font-size: 10px; }
 .progress-orbit-compact .progress-orbit-map { max-height: 310px; }
-.progress-orbit-compact .progress-orbit-key { max-height: 290px; }
+.progress-orbit-compact .progress-orbit-key { max-height: none; overflow: visible; }
 .progress-orbit-compact .progress-orbit-key button { padding: 10px 2px; gap: 9px; }
 .progress-orbit-compact .progress-orbit-key-copy strong { font-size: 10px; }
 .progress-orbit-compact .progress-orbit-key-value strong { font-size: 14px; }
@@ -1712,6 +1712,15 @@ kbd { font-family: inherit; }
 .inbox-status-orbit .progress-orbit-map { max-height: 220px; }
 .inbox-orbit-breakdown { width: 100%; font-size: 10px; }
 .inbox-orbit-breakdown summary { padding: 8px 0; color: var(--blue); cursor: pointer; }
-.inbox-orbit-breakdown .progress-orbit-key { max-height: 250px; }
+.inbox-orbit-breakdown .progress-orbit-key { max-height: none; overflow: visible; }
 .inbox-orbit-controls label:first-child { grid-column: 1 / -1; }
 .inbox-orbit-panel:has(.inbox-status-orbit) .progress-orbit-grid { grid-template-columns: minmax(0, 1fr); }
+
+/* Name every category on the orbit; give wrapped labels space in the sidebar. */
+.progress-orbit-node-label { fill: var(--ink); font-size: 16px; font-weight: 600; paint-order: stroke; stroke: var(--paper); stroke-width: 3px; stroke-linejoin: round; }
+.progress-orbit-node-count { font-size: 18px; }
+.progress-orbit-least { display: flex; align-items: baseline; gap: 7px; margin: 8px 0 14px; padding: 10px 12px; border: 1px dashed var(--muted); border-radius: 10px; color: var(--ink); font-size: 11px; line-height: 1.65; }
+.progress-orbit-least-symbol { flex: 0 0 auto; width: 10px; height: 10px; border: 1.5px dashed var(--ink); border-radius: 50%; }
+.progress-orbit-least-ring { fill: none; stroke: var(--ink); stroke-width: 1.5px; stroke-dasharray: 4 4; }
+.progress-orbit-compact .progress-orbit-least { padding: 8px 10px; font-size: 10px; }
+.inbox-status-orbit .progress-orbit-map { max-height: none; height: auto; aspect-ratio: 1; }
