@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildProjectProgress, completionDateKey, moveProgressPeriod, progressToday, progressWindow } from "../lib/project-progress.ts";
+import { buildProjectProgress, completionDateKey, moveProgressPeriod, progressToday, progressWindow, summarizeProgressRows } from "../lib/project-progress.ts";
+import { filterProjectCategory, groupProjectsByCategory } from "../lib/projects.ts";
 
 const projects = [{ id: "a", name: "A", color: "#2457ff", description: "" }, { id: "b", name: "B", color: "#8f5dff", description: "", disabled: true }];
 const task = (id, project, completedAt, completed = true) => ({ id, title: `Task ${id}`, project, completed, completedAt });
@@ -76,4 +77,39 @@ test("undated, unlisted, empty, and future records stay explicit", () => {
   const future = buildProjectProgress(tasks, projects, { ...options, anchor: "2027-02-01" });
   assert.equal(future.totalCompleted, 0);
   assert.ok(future.days.every((day) => day.future));
+});
+
+test("category completion weights applicable tasks and preserves empty and N/A-only bundles", () => {
+  const categorized = projects.map(project => ({ ...project, category: "Shared theme" }));
+  const source = [task(1, "A", "2026-10-05"), ...Array.from({ length: 9 }, (_, i) => task(i + 2, "B", undefined, false)), { ...task(11, "B", "2026-10-05"), status: "na" }];
+  const result = buildProjectProgress(source, categorized, options);
+  const total = summarizeProgressRows(result.rows);
+  assert.equal(total.percent, 10); // 1/10; averaging 100% and 0% would incorrectly give 50%.
+  assert.equal(total.periodCompleted, 1);
+  assert.equal(total.open, 9);
+  assert.equal(total.notApplicable, 1);
+  assert.equal(total.counts.reduce((sum, count) => sum + count, 0), 1);
+  assert.equal(summarizeProgressRows(buildProjectProgress([], categorized, options).rows).percent, null);
+  const naOnly = summarizeProgressRows(buildProjectProgress(source.filter(task => task.status === "na"), categorized, options).rows);
+  assert.equal(naOnly.percent, null);
+  assert.equal(naOnly.notApplicable, 1);
+  assert.equal(naOnly.periodCompleted, 0);
+  assert.equal(summarizeProgressRows([]).percent, null);
+});
+
+test("category bundles and timeline columns reconcile for every period and filter", () => {
+  const categorized = projects.map((project, index) => ({ ...project, category: index ? "Custom second theme" : "Custom first theme" }));
+  for (const period of ["week", "month", "quarter", "year"]) {
+    for (const status of ["all", "active", "disabled"]) {
+      for (const category of ["", "Custom first theme", "Custom second theme"]) {
+        const scope = filterProjectCategory(tasks, categorized, category);
+        const data = buildProjectProgress(scope.tasks, scope.projects, { ...options, period, status });
+        const groups = groupProjectsByCategory(data.rows.map(row => ({ ...row.project, row }))).map(group => summarizeProgressRows(group.projects.map(project => project.row)));
+        assert.equal(groups.reduce((sum, group) => sum + group.periodCompleted, 0), data.totalCompleted);
+        assert.equal(groups.reduce((sum, group) => sum + group.open, 0), data.openTasks);
+        assert.equal(groups.reduce((sum, group) => sum + group.counts.reduce((s, n) => s + n, 0), 0), data.totalCompleted);
+        for (let index = 0; index < data.buckets.length; index++) assert.equal(groups.reduce((sum, group) => sum + group.counts[index], 0), data.rows.reduce((sum, row) => sum + row.counts[index], 0));
+      }
+    }
+  }
 });

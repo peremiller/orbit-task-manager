@@ -1491,6 +1491,24 @@ kbd { font-family: inherit; }
 .progress-current { display: grid; gap: 6px; min-width: 130px; font-size: 10px; }
 .progress-current > i { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .progress-current b { display: block; height: 100%; }
+.progress-category-section { min-width: 0; }
+.progress-category-section > .progress-panel-heading { margin-bottom: 16px; }
+.progress-bundle-totals { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin: 0 0 18px; }
+.progress-bundle-totals > div { display: grid; gap: 5px; padding: 12px; background: var(--canvas); border-radius: 10px; }
+.progress-bundle-totals dt { color: var(--muted); font-size: 11px; }
+.progress-bundle-totals dd { margin: 0; color: var(--ink); font-size: 25px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.progress-bundle-excluded { margin: -8px 0 14px; color: var(--muted); font-size: 10px; }
+.progress-bundle-columns { display: grid; grid-template-columns: minmax(0,1fr) 60px 60px; gap: 8px; margin: 0 0 3px; padding-left: 21px; color: var(--muted); font-size: 10px; }
+.progress-bundle-columns > span:not(:first-child) { text-align: right; }
+.progress-category-bundle .bundle-child-open { gap: 8px; }
+.progress-bundle-child-metrics { display: grid; grid-template-columns: 60px 60px; gap: 8px; flex-shrink: 0; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+.progress-bundle-child-metrics > strong { font-size: 14px; color: var(--blue); }
+.progress-timeline-note { margin: 0 0 15px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.progress-category-total > th, .progress-category-total > td { background: var(--blue-soft); border-top: 2px solid var(--line); }
+.progress-project-table .progress-category-total > th:first-child { background: var(--blue-soft); }
+.progress-project-table .progress-category-total > th button { display: flex; align-items: center; gap: 7px; color: var(--ink); font-weight: 700; }
+.progress-category-total > th button svg { flex-shrink: 0; }
+.progress-project-table .progress-project-child > th:first-child { padding-left: 29px; }
 .progress-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .progress-detail-table { min-width: 560px; }
 .progress-detail-table td:first-child { min-width: 200px; }
@@ -1513,6 +1531,8 @@ kbd { font-family: inherit; }
   .progress-controls > label select { max-width: 100%; }
   .progress-period-navigation { width: 100%; justify-content: space-between; flex-wrap: wrap; }
   .progress-project-table th:first-child { min-width: 150px; max-width: 180px; }
+  .progress-bundle-columns { grid-template-columns: minmax(0,1fr) 45px 45px; gap: 6px; }
+  .progress-bundle-child-metrics { grid-template-columns: 45px 45px; gap: 6px; }
   .project-merge-dialog { padding: 18px; }
 }
 

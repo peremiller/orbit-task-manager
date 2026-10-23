@@ -65,6 +65,20 @@ export function progressProjects(tasks: ProgressTask[], projects: Project[]): Pr
 
 export function completionLevel(count: number) { return count === 0 ? 0 : count === 1 ? 1 : count <= 3 ? 2 : count <= 6 ? 3 : 4; }
 
+type ProgressTotals = { notApplicable: number; total: number; done: number; open: number; periodCompleted: number; counts: number[] };
+
+export function summarizeProgressRows(rows: readonly ProgressTotals[]) {
+  const totals = rows.reduce<ProgressTotals>((sum, row) => ({
+    notApplicable: sum.notApplicable + row.notApplicable,
+    total: sum.total + row.total,
+    done: sum.done + row.done,
+    open: sum.open + row.open,
+    periodCompleted: sum.periodCompleted + row.periodCompleted,
+    counts: row.counts.map((count, index) => (sum.counts[index] ?? 0) + count),
+  }), { notApplicable: 0, total: 0, done: 0, open: 0, periodCompleted: 0, counts: [] });
+  return { ...totals, percent: totals.total ? Math.round(totals.done / totals.total * 100) : null };
+}
+
 export function buildProjectProgress<T extends ProgressTask>(tasks: T[], projects: Project[], options: { period: ProgressPeriod; anchor: string; projectId?: string; status?: "all" | "active" | "disabled"; today?: string }) {
   const { period, anchor } = options;
   const today = options.today ?? progressToday();

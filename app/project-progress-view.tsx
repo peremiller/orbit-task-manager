@@ -1,12 +1,13 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Download, TrendingUp } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, Download, FolderTree, Rows3, TrendingUp } from "lucide-react";
 import { useMemo, useState } from "react";
-import { buildProjectProgress, completionLevel, moveProgressPeriod, progressDateLabel, progressProjects, progressToday, PROGRESS_TIME_ZONE, WEEKDAY_NAMES, type ProgressPeriod } from "@/lib/project-progress";
-import { filterProjectCategory, projectCategory, projectCategoryNames, projectForId, type Project } from "@/lib/projects";
+import { buildProjectProgress, completionLevel, moveProgressPeriod, progressDateLabel, progressProjects, progressToday, summarizeProgressRows, PROGRESS_TIME_ZONE, WEEKDAY_NAMES, type ProgressPeriod } from "@/lib/project-progress";
+import { filterProjectCategory, groupProjectsByCategory, projectCategory, projectCategoryNames, projectForId, type Project } from "@/lib/projects";
 import type { Task } from "./page";
 
 const PERIODS: { value: ProgressPeriod; label: string }[] = [{ value: "week", label: "Week" }, { value: "month", label: "Month" }, { value: "quarter", label: "Quarter" }, { value: "year", label: "Year" }];
+const BUNDLE_COLORS = ["#2457ff", "#8256d0", "#11826a", "#a66a13", "#bf5279", "#087e9d", "#967135", "#7153a8", "#596779"];
 
 export function ProjectProgressView({ tasks, projects, initialProjectName, onEditTask }: { tasks: Task[]; projects: Project[]; initialProjectName?: string | null; onEditTask: (task: Task) => void }) {
   const [period, setPeriod] = useState<ProgressPeriod>("month");
@@ -15,6 +16,8 @@ export function ProjectProgressView({ tasks, projects, initialProjectName, onEdi
   const [status, setStatus] = useState<"all" | "active" | "disabled">("all");
   const [category, setCategory] = useState("");
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [layout, setLayout] = useState<"bundles" | "timeline">("bundles");
+  const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
   const today = progressToday();
   const choices = useMemo(() => progressProjects(tasks, projects), [tasks, projects]);
   const categories = projectCategoryNames(choices);
@@ -22,6 +25,10 @@ export function ProjectProgressView({ tasks, projects, initialProjectName, onEdi
   const scope = useMemo(() => filterProjectCategory(tasks, choices, currentCategory), [tasks, choices, currentCategory]);
   const currentProjectId = projectForId(scope.projects, projectId)?.id ?? "";
   const data = useMemo(() => buildProjectProgress(scope.tasks, scope.projects, { period, anchor, projectId: currentProjectId, status, today }), [scope, period, anchor, currentProjectId, status, today]);
+  const groups = useMemo(() => groupProjectsByCategory(data.rows.map(row => ({ ...row.project, row }))).map(group => {
+    const rows = group.projects.map(project => project.row);
+    return { name: group.name, rows, ...summarizeProgressRows(rows) };
+  }), [data.rows]);
   const periodTitle = period === "year" ? data.start.slice(0, 4) : period === "quarter" ? `Q${Math.floor((Number(data.start.slice(5, 7)) - 1) / 3) + 1} ${data.start.slice(0, 4)}` : period === "month" ? progressDateLabel(data.start, { month: "long", year: "numeric" }) : `${progressDateLabel(data.start)} – ${progressDateLabel(data.end, { month: "short", day: "numeric", year: "numeric" })}`;
   const calendarOffset = (new Date(`${data.start}T00:00:00Z`).getUTCDay() + 6) % 7;
   const calendarWeeks = Math.ceil((calendarOffset + data.days.length) / 7);
@@ -31,7 +38,7 @@ export function ProjectProgressView({ tasks, projects, initialProjectName, onEdi
   function changeScope(action: () => void) { action(); setSelectedDay(null); }
 
   function exportCsv() {
-    const rows = [["Task ID", "Task", "Project / Priority", "Completion timestamp", `Completion day (${PROGRESS_TIME_ZONE})`, "Priority"], ...detail.map(({ task, date }) => [task.id, task.title, task.project, task.completedAt ?? "", date, task.priority])];
+    const rows = [["Task ID", "Task", "Parent category", "Project / Priority", "Completion timestamp", `Completion day (${PROGRESS_TIME_ZONE})`, "Priority"], ...detail.map(({ task, date }) => [task.id, task.title, projectCategory(choices.find(project => project.name === task.project) ?? { name: task.project }), task.project, task.completedAt ?? "", date, task.priority])];
     const csv = rows.map((row) => row.map((value) => {
       const text = String(value);
       const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
@@ -86,18 +93,46 @@ export function ProjectProgressView({ tasks, projects, initialProjectName, onEdi
       <section className="progress-panel" aria-labelledby="progress-weekdays-title"><div className="progress-panel-heading"><div><h2 id="progress-weekdays-title">Completions by weekday</h2><p>Totals within the selected period.</p></div></div><ol className="progress-weekdays">{data.weekdays.map((day) => <li key={day.label}><span>{day.label}</span><div><i style={{ width: `${day.count / maxWeekday * 100}%` }} /></div><strong>{day.count}</strong></li>)}</ol></section>
     </div>
 
-    <section className="progress-panel" aria-labelledby="progress-projects-title">
-      <div className="progress-panel-heading"><div><h2 id="progress-projects-title">Progress by project / priority</h2><p>{period === "quarter" ? "Weekly columns" : period === "year" ? "Monthly columns" : "Daily columns"} show completed tasks. Current completion is completed tasks ÷ applicable tasks; N/A tasks are excluded.</p></div></div>
-      <div className="progress-table-scroll" tabIndex={0} role="region" aria-label="Project progress comparison"><table className="progress-project-table"><thead><tr><th scope="col">Project / Priority</th><th scope="col">Completed in period</th><th scope="col">Current completion</th>{data.buckets.map((bucket) => <th scope="col" key={bucket.start} title={`${bucket.start} – ${bucket.end}`}>{bucket.label}</th>)}</tr></thead><tbody>{data.rows.map((row) => <tr key={row.project.id}>
-        <th scope="row"><button type="button" onClick={() => changeScope(() => setProjectId(row.project.id))}><span className="project-dot" style={{ background: row.project.color }} />{row.project.name || "Unassigned"}</button><small>{projectCategory(row.project)}</small>{row.project.disabled && <small>Disabled</small>}</th>
-        <td><strong>{row.periodCompleted}</strong></td><td><div className="progress-current"><span>{row.done} / {row.total}{row.percent === null ? " · No tasks" : ` · ${row.percent}%`}</span>{row.notApplicable > 0 && <small>{row.notApplicable} N/A excluded</small>}<i><b style={{ width: `${row.percent ?? 0}%`, background: row.project.color }} /></i></div></td>
-        {row.counts.map((count, index) => <td key={data.buckets[index].start}><button type="button" className={`progress-cell activity-${completionLevel(count)}${data.buckets[index].start > today ? " future" : ""}`} disabled={data.buckets[index].start > today} title={`${row.project.name || "Unassigned"} · ${data.buckets[index].start} – ${data.buckets[index].end}: ${count} completed tasks`} aria-label={`${row.project.name || "Unassigned"}, ${data.buckets[index].start} to ${data.buckets[index].end}: ${count} completed tasks; filter to this project`} onClick={() => changeScope(() => setProjectId(row.project.id))}>{data.buckets[index].start > today ? "—" : count}</button></td>)}
-      </tr>)}</tbody></table>{data.rows.length === 0 && <p className="progress-empty">No projects match these filters.</p>}</div>
+    <section className="progress-category-section" aria-labelledby="progress-projects-title">
+      <div className="progress-panel-heading"><div><h2 id="progress-projects-title">Progress by parent category</h2><p>{groups.length} category bundles · {data.rows.length} projects / priorities. Each bundle combines its projects’ progress for {periodTitle}. Current completion excludes N/A tasks.</p></div><div className="progress-detail-actions">
+        {(currentCategory || currentProjectId) && <button className="secondary-button" type="button" onClick={() => changeScope(() => { setCategory(""); setProjectId(""); })}>All category bundles</button>}
+        <div className="project-view-switch" role="group" aria-label="Progress layout"><button type="button" className={layout === "bundles" ? "active" : ""} aria-pressed={layout === "bundles"} onClick={() => setLayout("bundles")}><FolderTree size={16} /> Bundles</button><button type="button" className={layout === "timeline" ? "active" : ""} aria-pressed={layout === "timeline"} onClick={() => setLayout("timeline")}><Rows3 size={16} /> Timeline</button></div>
+      </div></div>
+      {groups.length === 0 ? <p className="progress-empty">No projects match these filters.</p> : layout === "bundles" ? <div className="project-category-bundles progress-category-bundles">{groups.map(group => {
+        const color = BUNDLE_COLORS[categories.indexOf(group.name) % BUNDLE_COLORS.length];
+        const disabled = group.rows.filter(row => row.project.disabled).length;
+        return <section className="project-category-bundle progress-category-bundle" key={group.name} aria-label={`${group.name} progress bundle`} style={{ borderTopColor: color }}>
+          <header className="category-bundle-heading"><span className="category-bundle-icon" style={{ color, background: `${color}12` }}><FolderTree size={23} /></span><div><h3>{group.name}</h3><p>{group.rows.length} {group.rows.length === 1 ? "project / priority" : "projects / priorities"}{disabled > 0 ? ` · ${disabled} disabled` : ""}</p></div></header>
+          <dl className="progress-bundle-totals"><div><dt>Completed in period</dt><dd>{group.periodCompleted}</dd></div><div><dt>Open tasks now</dt><dd>{group.open}</dd></div></dl>
+          <div className="category-bundle-summary"><span>Current completion · {group.done} / {group.total}</span><strong>{group.percent === null ? "—" : `${group.percent}%`}</strong></div>
+          <div className="category-bundle-meter" aria-label={group.percent === null ? "No applicable tasks" : `${group.percent}% of applicable tasks complete`}><span style={{ width: `${group.percent ?? 0}%`, background: color }} /></div>
+          {group.notApplicable > 0 && <p className="progress-bundle-excluded">{group.notApplicable} N/A tasks excluded</p>}
+          <div className="progress-bundle-columns" aria-hidden="true"><span>Project / Priority</span><span>In period</span><span>Current</span></div>
+          <ul className="category-bundle-projects">{group.rows.map(row => <li className={row.project.disabled ? "bundle-child disabled" : "bundle-child"} key={row.project.id}>
+            <button className="bundle-child-open" type="button" onClick={() => changeScope(() => setProjectId(row.project.id))} aria-label={`View ${row.project.name || "Unassigned"} progress: ${row.periodCompleted} completed in period, ${row.percent === null ? "no applicable tasks" : `${row.percent}% current completion`}`}><span className="project-dot" style={{ background: row.project.color }} /><span><strong>{row.project.name || "Unassigned"}</strong><small>{row.project.disabled ? "Disabled · " : ""}{row.open} open tasks</small></span><span className="progress-bundle-child-metrics"><strong>{row.periodCompleted}</strong><span>{row.percent === null ? "—" : `${row.percent}%`}</span></span></button>
+          </li>)}</ul>
+          <button className="category-bundle-details" type="button" onClick={() => changeScope(() => { setCategory(group.name); setProjectId(""); })} aria-label={`View ${group.name} category activity`}>View category activity <ArrowRight size={15} /></button>
+        </section>;
+      })}</div> : <div className="progress-panel">
+        <p className="progress-timeline-note">{period === "quarter" ? "Weekly" : period === "year" ? "Monthly" : "Daily"} columns show completed tasks. Expand or collapse a parent category to compare its projects.</p>
+        <div className="progress-table-scroll" tabIndex={0} role="region" aria-label="Project progress comparison grouped by parent category"><table className="progress-project-table"><thead><tr><th scope="col">Parent category / Project</th><th scope="col">Completed in period</th><th scope="col">Current completion</th>{data.buckets.map(bucket => <th scope="col" key={bucket.start} title={`${bucket.start} – ${bucket.end}`}>{bucket.label}</th>)}</tr></thead>{groups.map(group => {
+          const expanded = !collapsedCategories.includes(group.name);
+          const color = BUNDLE_COLORS[categories.indexOf(group.name) % BUNDLE_COLORS.length];
+          return <tbody key={group.name} aria-label={`${group.name} progress`}>
+            <tr className="progress-category-total"><th scope="row"><button type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${group.name} projects`} aria-expanded={expanded} onClick={() => setCollapsedCategories(previous => expanded ? [...previous, group.name] : previous.filter(name => name !== group.name))}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<FolderTree size={16} />{group.name}</button><small>{group.rows.length} projects / priorities · {group.open} open tasks</small></th><td><strong>{group.periodCompleted}</strong></td><td><div className="progress-current"><span>{group.done} / {group.total}{group.percent === null ? " · No applicable tasks" : ` · ${group.percent}%`}</span>{group.notApplicable > 0 && <small>{group.notApplicable} N/A excluded</small>}<i><b style={{ width: `${group.percent ?? 0}%`, background: color }} /></i></div></td>{group.counts.map((count, index) => <td key={data.buckets[index].start}><span className={`progress-cell activity-${completionLevel(count)}${data.buckets[index].start > today ? " future" : ""}`} title={`${group.name} · ${data.buckets[index].start} – ${data.buckets[index].end}: ${count} completed tasks`}>{data.buckets[index].start > today ? "—" : count}</span></td>)}</tr>
+            {expanded && group.rows.map(row => <tr className="progress-project-child" key={row.project.id}>
+              <th scope="row"><button type="button" onClick={() => changeScope(() => setProjectId(row.project.id))}><span className="project-dot" style={{ background: row.project.color }} />{row.project.name || "Unassigned"}</button>{row.project.disabled && <small>Disabled</small>}</th>
+              <td><strong>{row.periodCompleted}</strong></td><td><div className="progress-current"><span>{row.done} / {row.total}{row.percent === null ? " · No applicable tasks" : ` · ${row.percent}%`}</span>{row.notApplicable > 0 && <small>{row.notApplicable} N/A excluded</small>}<i><b style={{ width: `${row.percent ?? 0}%`, background: row.project.color }} /></i></div></td>
+              {row.counts.map((count, index) => <td key={data.buckets[index].start}><button type="button" className={`progress-cell activity-${completionLevel(count)}${data.buckets[index].start > today ? " future" : ""}`} disabled={data.buckets[index].start > today} title={`${row.project.name || "Unassigned"} · ${data.buckets[index].start} – ${data.buckets[index].end}: ${count} completed tasks`} aria-label={`${row.project.name || "Unassigned"}, ${data.buckets[index].start} to ${data.buckets[index].end}: ${count} completed tasks; filter to this project`} onClick={() => changeScope(() => setProjectId(row.project.id))}>{data.buckets[index].start > today ? "—" : count}</button></td>)}
+            </tr>)}
+          </tbody>;
+        })}</table></div>
+      </div>}
     </section>
 
     <section className="progress-panel" aria-labelledby="progress-detail-title"><div className="progress-panel-heading"><div><h2 id="progress-detail-title">Completed tasks{selectedDay ? ` · ${progressDateLabel(selectedDay)}` : " in period"}</h2><p>{detail.length} recorded completions · select a task to open it.</p></div><div className="progress-detail-actions">{selectedDay && <button className="secondary-button" type="button" onClick={() => setSelectedDay(null)}>Show entire period</button>}<button className="secondary-button" type="button" onClick={exportCsv} disabled={detail.length === 0}><Download size={15} /> Export CSV</button></div></div>
       {detail.length ? <div className="progress-table-scroll"><table className="progress-detail-table"><thead><tr><th scope="col">Task</th><th scope="col">Project / Priority</th><th scope="col">Completed</th><th scope="col">Priority</th></tr></thead><tbody>{detail.map(({ task, date }) => <tr key={task.id}><td><button type="button" onClick={() => onEditTask(task)}>{task.title}</button></td><td>{task.project || "Unassigned"}</td><td><time dateTime={date}>{progressDateLabel(date, { month: "short", day: "numeric", year: "numeric" })}</time></td><td>{task.priority}</td></tr>)}</tbody></table></div> : <p className="progress-empty">No dated task completions in this selection. Complete a task to record progress, or choose another period.</p>}
     </section>
-    <details className="progress-methods"><summary>How progress is calculated</summary><p>Source: your synced Orbit workspace. Each currently completed task counts once on its recorded completion date in {PROGRESS_TIME_ZONE}. Tasks without valid dates are excluded from time charts. N/A tasks are excluded from completions, open tasks, and completion percentages. Open tasks and current completion use the present task list, regardless of the selected historical period.</p><p>These are retained task records, not historical workspace snapshots. Reopening or deleting tasks changes the totals; merged tasks are grouped under their destination project. Selecting a calendar day filters only the completed-task detail and its export.</p><p>Calendar colors represent daily counts. Comparison cells use the same count bands for the daily, weekly, or monthly column shown; numbers provide exact counts. No activity targets or due-date success rates are inferred.</p></details>
+    <details className="progress-methods"><summary>How progress is calculated</summary><p>Source: your synced Orbit workspace. Each currently completed task counts once on its recorded completion date in {PROGRESS_TIME_ZONE}. Tasks without valid dates are excluded from time charts. N/A tasks are excluded from completions, open tasks, and completion percentages. Open tasks and current completion use the present task list, regardless of the selected historical period.</p><p>Parent categories use the same assignments as Projects / Priorities. Category counts sum their visible child projects; current completion divides their combined completed tasks by combined applicable tasks, rather than averaging project percentages. All category bundles and timeline totals follow the selected period, category, project and status filters.</p><p>These are retained task records, not historical workspace snapshots. Reopening or deleting tasks changes the totals; merged tasks are grouped under their destination project. Selecting a calendar day filters only the completed-task detail and its export.</p><p>Calendar colors represent daily counts. Comparison cells use the same count bands for the daily, weekly, or monthly column shown; numbers provide exact counts. No activity targets or due-date success rates are inferred.</p></details>
   </div>;
 }
