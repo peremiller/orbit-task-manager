@@ -3,7 +3,7 @@
 import { ChevronLeft, ChevronRight, Download, TrendingUp } from "lucide-react";
 import { useMemo, useState } from "react";
 import { buildProjectProgress, completionLevel, moveProgressPeriod, progressDateLabel, progressProjects, progressToday, PROGRESS_TIME_ZONE, WEEKDAY_NAMES, type ProgressPeriod } from "@/lib/project-progress";
-import { projectForId, type Project } from "@/lib/projects";
+import { filterProjectCategory, projectCategory, projectCategoryNames, projectForId, type Project } from "@/lib/projects";
 import type { Task } from "./page";
 
 const PERIODS: { value: ProgressPeriod; label: string }[] = [{ value: "week", label: "Week" }, { value: "month", label: "Month" }, { value: "quarter", label: "Quarter" }, { value: "year", label: "Year" }];
@@ -13,11 +13,15 @@ export function ProjectProgressView({ tasks, projects, initialProjectName, onEdi
   const [anchor, setAnchor] = useState(() => progressToday());
   const [projectId, setProjectId] = useState(() => projects.find((project) => project.name === initialProjectName)?.id ?? "");
   const [status, setStatus] = useState<"all" | "active" | "disabled">("all");
+  const [category, setCategory] = useState("");
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const today = progressToday();
   const choices = useMemo(() => progressProjects(tasks, projects), [tasks, projects]);
-  const currentProjectId = projectForId(choices, projectId)?.id ?? "";
-  const data = useMemo(() => buildProjectProgress(tasks, projects, { period, anchor, projectId: currentProjectId, status, today }), [tasks, projects, period, anchor, currentProjectId, status, today]);
+  const categories = projectCategoryNames(choices);
+  const currentCategory = categories.includes(category) ? category : "";
+  const scope = useMemo(() => filterProjectCategory(tasks, choices, currentCategory), [tasks, choices, currentCategory]);
+  const currentProjectId = projectForId(scope.projects, projectId)?.id ?? "";
+  const data = useMemo(() => buildProjectProgress(scope.tasks, scope.projects, { period, anchor, projectId: currentProjectId, status, today }), [scope, period, anchor, currentProjectId, status, today]);
   const periodTitle = period === "year" ? data.start.slice(0, 4) : period === "quarter" ? `Q${Math.floor((Number(data.start.slice(5, 7)) - 1) / 3) + 1} ${data.start.slice(0, 4)}` : period === "month" ? progressDateLabel(data.start, { month: "long", year: "numeric" }) : `${progressDateLabel(data.start)} – ${progressDateLabel(data.end, { month: "short", day: "numeric", year: "numeric" })}`;
   const calendarOffset = (new Date(`${data.start}T00:00:00Z`).getUTCDay() + 6) % 7;
   const calendarWeeks = Math.ceil((calendarOffset + data.days.length) / 7);
@@ -46,7 +50,8 @@ export function ProjectProgressView({ tasks, projects, initialProjectName, onEdi
       <div className="project-view-switch" role="group" aria-label="Progress period">{PERIODS.map((item) => <button type="button" key={item.value} className={period === item.value ? "active" : ""} aria-pressed={period === item.value} onClick={() => changeScope(() => setPeriod(item.value))}>{item.label}</button>)}</div>
       <div className="progress-period-navigation"><button className="icon-button" type="button" aria-label="Previous period" onClick={() => changeScope(() => setAnchor(moveProgressPeriod(anchor, period, -1)))}><ChevronLeft size={18} /></button><strong aria-live="polite">{periodTitle}</strong><button className="icon-button" type="button" aria-label="Next period" onClick={() => changeScope(() => setAnchor(moveProgressPeriod(anchor, period, 1)))}><ChevronRight size={18} /></button><button className="secondary-button" type="button" onClick={() => changeScope(() => setAnchor(today))}>Today</button></div>
       <label>Reference date<input type="date" aria-label="Progress reference date" value={anchor} onChange={(event) => { if (/^\d{4}-\d{2}-\d{2}$/.test(event.target.value)) changeScope(() => setAnchor(event.target.value)); }} /></label>
-      <label>Project / Priority<select aria-label="Progress project / priority" value={currentProjectId} onChange={(event) => changeScope(() => setProjectId(event.target.value))}><option value="">All projects / priorities</option>{choices.filter((project) => status === "all" || (status === "disabled" ? project.disabled : !project.disabled)).map((project) => <option key={project.id} value={project.id}>{project.name || "Unassigned"}{project.disabled ? " (disabled)" : ""}</option>)}</select></label>
+      <label>Parent category<select aria-label="Progress parent category" value={currentCategory} onChange={event => changeScope(() => { setCategory(event.target.value); setProjectId(""); })}><option value="">All categories</option>{categories.map(name => <option key={name}>{name}</option>)}</select></label>
+      <label>Project / Priority<select aria-label="Progress project / priority" value={currentProjectId} onChange={(event) => changeScope(() => setProjectId(event.target.value))}><option value="">All projects / priorities</option>{scope.projects.filter((project) => status === "all" || (status === "disabled" ? project.disabled : !project.disabled)).map((project) => <option key={project.id} value={project.id}>{project.name || "Unassigned"}{project.disabled ? " (disabled)" : ""}</option>)}</select></label>
       <label>Project status<select aria-label="Progress project status" value={status} onChange={(event) => changeScope(() => { setStatus(event.target.value as typeof status); setProjectId(""); })}><option value="all">All statuses</option><option value="active">Active</option><option value="disabled">Disabled</option></select></label>
     </section>
 
@@ -84,7 +89,7 @@ export function ProjectProgressView({ tasks, projects, initialProjectName, onEdi
     <section className="progress-panel" aria-labelledby="progress-projects-title">
       <div className="progress-panel-heading"><div><h2 id="progress-projects-title">Progress by project / priority</h2><p>{period === "quarter" ? "Weekly columns" : period === "year" ? "Monthly columns" : "Daily columns"} show completed tasks. Current completion is completed tasks ÷ applicable tasks; N/A tasks are excluded.</p></div></div>
       <div className="progress-table-scroll" tabIndex={0} role="region" aria-label="Project progress comparison"><table className="progress-project-table"><thead><tr><th scope="col">Project / Priority</th><th scope="col">Completed in period</th><th scope="col">Current completion</th>{data.buckets.map((bucket) => <th scope="col" key={bucket.start} title={`${bucket.start} – ${bucket.end}`}>{bucket.label}</th>)}</tr></thead><tbody>{data.rows.map((row) => <tr key={row.project.id}>
-        <th scope="row"><button type="button" onClick={() => changeScope(() => setProjectId(row.project.id))}><span className="project-dot" style={{ background: row.project.color }} />{row.project.name || "Unassigned"}</button>{row.project.disabled && <small>Disabled</small>}</th>
+        <th scope="row"><button type="button" onClick={() => changeScope(() => setProjectId(row.project.id))}><span className="project-dot" style={{ background: row.project.color }} />{row.project.name || "Unassigned"}</button><small>{projectCategory(row.project)}</small>{row.project.disabled && <small>Disabled</small>}</th>
         <td><strong>{row.periodCompleted}</strong></td><td><div className="progress-current"><span>{row.done} / {row.total}{row.percent === null ? " · No tasks" : ` · ${row.percent}%`}</span>{row.notApplicable > 0 && <small>{row.notApplicable} N/A excluded</small>}<i><b style={{ width: `${row.percent ?? 0}%`, background: row.project.color }} /></i></div></td>
         {row.counts.map((count, index) => <td key={data.buckets[index].start}><button type="button" className={`progress-cell activity-${completionLevel(count)}${data.buckets[index].start > today ? " future" : ""}`} disabled={data.buckets[index].start > today} title={`${row.project.name || "Unassigned"} · ${data.buckets[index].start} – ${data.buckets[index].end}: ${count} completed tasks`} aria-label={`${row.project.name || "Unassigned"}, ${data.buckets[index].start} to ${data.buckets[index].end}: ${count} completed tasks; filter to this project`} onClick={() => changeScope(() => setProjectId(row.project.id))}>{data.buckets[index].start > today ? "—" : count}</button></td>)}
       </tr>)}</tbody></table>{data.rows.length === 0 && <p className="progress-empty">No projects match these filters.</p>}</div>

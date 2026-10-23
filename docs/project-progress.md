@@ -18,3 +18,12 @@ Projects / Priorities offers a searchable merge dialog. Select two or more exist
 Verification: `npm run test:projects`, targeted ESLint, TypeScript, and production build. Tests cover lossless merges, stale selections, nested source aliases, legacy recovery, Manila midnight, leap days, calendar boundaries, all filter populations, future/undated records, and reconciliation between project/day/weekday/period totals.
 
 N/A tasks remain in Inbox for reference and can be restored through their status selector. They are excluded from open work, completion percentages, completion charts, and karma. Marking a recurring task N/A does not create another occurrence.
+
+
+## Parent categories
+
+Projects carry an optional `category` string. On first load, Orbit assigns missing categories from project-name themes and saves them through the existing account workspace sync. Existing custom categories and explicit Uncategorized choices take precedence over suggestions. Parent categories organize projects without changing project IDs, task project references, disabled status, merged aliases, attachments, or task history.
+
+Projects / Priorities and the sidebar group children under collapsible parent themes. Parent categories can be renamed in bulk, created by typing a new theme on an assigned project, or changed per project in project settings. Empty categories are not retained. New projects receive a suggested category unless an explicit one is supplied. A merge inherits the destination category unless the user chooses another; original categories are retained in merge metadata.
+
+The Project Progress parent-category filter scopes the project selector, daily heatmap, weekday totals, current completion, detail and CSV export together. Category completion percentages are weighted by applicable task counts; N/A tasks are excluded. Disabled projects remain in their parent category and remain governed by the existing All / Active / Disabled filters.

@@ -3,7 +3,7 @@
 import { ArrowRight, Merge, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { isActionableTask } from "@/lib/task-status";
-import { projectMergeError, type Project, type ProjectMergeRequest } from "@/lib/projects";
+import { projectCategory, projectMergeError, type Project, type ProjectMergeRequest } from "@/lib/projects";
 
 type Props = {
   projects: Project[];
@@ -17,6 +17,7 @@ export function ProjectMergeDialog({ projects, tasks, onMerge, onClose }: Props)
   const review = useRef<HTMLElement>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [destinationId, setDestinationId] = useState("");
+  const [categoryOverride, setCategoryOverride] = useState<string | null>(null);
   const [nameOverride, setNameOverride] = useState<string | null>(null);
   const [disabledOverride, setDisabledOverride] = useState<boolean | null>(null);
   const [search, setSearch] = useState("");
@@ -40,6 +41,7 @@ export function ProjectMergeDialog({ projects, tasks, onMerge, onClose }: Props)
   const selected = projects.filter((project) => selectedIds.includes(project.id));
   const destination = selected.find((project) => project.id === destinationId);
   const name = nameOverride ?? destination?.name ?? "";
+  const category = categoryOverride ?? projectCategory(destination ?? selected[0] ?? { name: "" });
   const disabled = disabledOverride ?? destination?.disabled ?? (selected.length > 0 && selected.every((project) => project.disabled));
   const selectedNames = new Set(selected.map((project) => project.name));
   const combinedTasks = tasks.filter((task) => selectedNames.has(task.project));
@@ -47,7 +49,7 @@ export function ProjectMergeDialog({ projects, tasks, onMerge, onClose }: Props)
   const openCount = combinedTasks.filter(isActionableTask).length;
   const naCount = combinedTasks.filter(task => task.status === "na").length;
   const matches = projects.filter((project) => project.name.toLowerCase().includes(search.trim().toLowerCase()));
-  const request: ProjectMergeRequest = { projectIds: selectedIds, destinationId: destinationId === "__new__" ? null : destinationId, name, disabled };
+  const request: ProjectMergeRequest = { projectIds: selectedIds, destinationId: destinationId === "__new__" ? null : destinationId, name, disabled, category };
 
   function selectProject(id: string, checked: boolean) {
     const next = checked ? [...selectedIds, id] : selectedIds.filter((value) => value !== id);
@@ -55,6 +57,7 @@ export function ProjectMergeDialog({ projects, tasks, onMerge, onClose }: Props)
     if (!destinationId || (destinationId !== "__new__" && !next.includes(destinationId))) {
       setDestinationId(next[0] ?? "");
       setNameOverride(null);
+      setCategoryOverride(null);
       setDisabledOverride(null);
     }
     setError("");
@@ -99,19 +102,20 @@ export function ProjectMergeDialog({ projects, tasks, onMerge, onClose }: Props)
             </div>
           </fieldset>
           <div className="form-grid">
-            <label className="field-label">Destination<select value={destinationId} disabled={selected.length === 0} onChange={(event) => { setDestinationId(event.target.value); setNameOverride(null); setDisabledOverride(null); setError(""); }}>
+            <label className="field-label">Destination<select value={destinationId} disabled={selected.length === 0} onChange={(event) => { setDestinationId(event.target.value); setNameOverride(null); setCategoryOverride(null); setDisabledOverride(null); setError(""); }}>
               <option value="" disabled>Choose a destination</option>
               {selected.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
               <option value="__new__">Create a new combined project</option>
             </select></label>
             <label className="field-label">Merged project status<select value={disabled ? "disabled" : "active"} onChange={(event) => setDisabledOverride(event.target.value === "disabled")}><option value="active">Active</option><option value="disabled">Disabled</option></select></label>
           </div>
+          <label className="field-label">Parent category<input list="project-category-options" value={category} onChange={event => setCategoryOverride(event.target.value)} maxLength={60} required /></label>
           <label className="field-label">Combined name<input value={name} onChange={(event) => { setNameOverride(event.target.value); setError(""); }} maxLength={80} required placeholder="Name for the combined project / priority" /></label>
           <p className="project-merge-intro">{combinedTasks.length} tasks selected, including {completedCount} completed. Task IDs, dates, attachments, goals, and reporting links are kept.</p>
         </> : <section className="project-merge-review" aria-label="Merge preview" tabIndex={-1} ref={review}>
           <ul>{selected.map((project) => <li key={project.id}><span>{project.name}</span><small>{tasks.filter((task) => task.project === project.name).length} tasks · {project.disabled ? "Disabled" : "Active"}</small></li>)}</ul>
           <ArrowRight size={22} aria-hidden="true" />
-          <div className="project-merge-target"><strong>{name.trim()}</strong><span>{combinedTasks.length} tasks · {disabled ? "Disabled" : "Active"}</span><small>{completedCount} completed · {openCount} open{naCount > 0 ? ` · ${naCount} N/A` : ""}</small></div>
+          <div className="project-merge-target"><strong>{name.trim()}</strong><span>{category}</span><span>{combinedTasks.length} tasks · {disabled ? "Disabled" : "Active"}</span><small>{completedCount} completed · {openCount} open{naCount > 0 ? ` · ${naCount} N/A` : ""}</small></div>
           <p>The selected project entries will become this one project. All their tasks and completion history are kept, and the result syncs across your devices.</p>
           {disabled && <p><strong>The destination is disabled.</strong> Its tasks will stay out of active planning until you re-enable it.</p>}
         </section>}

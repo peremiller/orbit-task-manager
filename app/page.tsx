@@ -19,7 +19,6 @@ import {
   ListFilter,
   LogOut,
   Menu,
-  Merge,
   Moon,
   MoreHorizontal,
   Network,
@@ -63,8 +62,10 @@ import {
 import { computeKarma, clampDailyGoal, KARMA_LEVELS, type KarmaStats } from "@/lib/karma";
 import { filterTasks, normalizeProjectFilterQuery, projectFilterHref } from "@/lib/task-filters";
 import { mergeRecoveredProjects, mergeRecoveredTasks } from "@/lib/workspace-recovery";
-import { mergeProjects, projectForId, remapMergedTaskProjects, tasksForEnabledProjects, type Project, type ProjectMergeRequest } from "@/lib/projects";
+import { applyProjectCategoryAssignments, groupProjectsByCategory, initializeProjectCategories, PROJECT_CATEGORIES, projectCategory, projectCategoryNames, suggestProjectCategory, mergeProjects, projectForId, remapMergedTaskProjects, tasksForEnabledProjects, type Project, type ProjectMergeRequest, type ProjectCategoryAssignment } from "@/lib/projects";
 import { ProjectMergeDialog } from "./project-merge-dialog";
+import { ProjectCategoriesDialog } from "./project-categories-dialog";
+import { ProjectsView } from "./projects-view";
 import { createDefaultWorkTrackingState, normalizeWorkTracking, type WorkTrackingState } from "@/lib/work-tracking";
 import { GOAL_COLORS, normalizeGoals, uniqueGoalId, type Goal } from "@/lib/goals";
 import { ActualsView, EffortPlanView, SelectionManagerView, TimesheetReportView, WorkDashboardView } from "./work-tracking-views";
@@ -233,6 +234,7 @@ const emptyGoalDraft = {
 };
 
 const emptyProjectDraft = {
+  category: "",
   name: "",
   description: "",
   color: PROJECT_COLORS[0],
@@ -524,6 +526,8 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const [subtaskInput, setSubtaskInput] = useState("");
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [projectMergeOpen, setProjectMergeOpen] = useState(false);
+  const [projectCategoriesOpen, setProjectCategoriesOpen] = useState(false);
+  const [projectCategoryDraft, setProjectCategoryDraft] = useState("");
   const [progressInitialProject, setProgressInitialProject] = useState<string | null>(null);
   const [newProjectDraft, setNewProjectDraft] = useState(emptyProjectDraft);
   const [projectCreateError, setProjectCreateError] = useState("");
@@ -731,6 +735,9 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       }
 
       if (!active) return;
+      const categorizedProjects = initializeProjectCategories(nextProjects);
+      const migratedProjectCategories = categorizedProjects !== nextProjects;
+      nextProjects = categorizedProjects;
       setTasks(nextTasks);
       setProjects(nextProjects);
       setGoals(nextGoals);
@@ -743,7 +750,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         setToast("Recovered your earlier local tasks and projects, including completion status.");
       }
       setFocusTask((current) => nextTasks.find((task) => task.id === nextFocusTimer.taskId && isActionableTask(task)) ?? nextTasks.find((task) => task.id === current?.id && isActionableTask(task)) ?? nextTasks.find((task) => isActionableTask(task)) ?? null);
-      lastSyncedPayload.current = status === "synced" && !migratedTenHourSchedule
+      lastSyncedPayload.current = status === "synced" && !migratedTenHourSchedule && !migratedProjectCategories
         ? JSON.stringify({ tasks: nextTasks, projects: nextProjects, goals: nextGoals, schedule: nextSchedule, focusTimer: nextFocusTimer, focusHistory: nextFocusHistory, workTracking: nextWorkTracking, kanbanColumns: nextKanbanColumns })
         : "";
       try {
@@ -760,7 +767,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       }
       hydrated.current = true;
       syncWasOffline.current = status === "offline";
-      setSyncStatus(migratedTenHourSchedule ? "syncing" : status);
+      setSyncStatus(migratedTenHourSchedule || migratedProjectCategories ? "syncing" : status);
       setWorkspaceReady(true);
     }
 
@@ -919,7 +926,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         if (!active || !workspace || workspace.revision <= serverRevision.current) return;
         const remote = {
           tasks: Array.isArray(workspace.tasks) ? workspace.tasks : INITIAL_TASKS,
-          projects: Array.isArray(workspace.projects) ? workspace.projects : INITIAL_PROJECTS,
+          projects: initializeProjectCategories(Array.isArray(workspace.projects) ? workspace.projects : INITIAL_PROJECTS),
           goals: normalizeGoals(workspace.goals),
           schedule: isScheduleWindow(workspace.schedule) ? workspace.schedule : DEFAULT_TODAY_SCHEDULE,
           focusTimer: normalizeFocusTimer(workspace.focusTimer),
@@ -928,7 +935,8 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           kanbanColumns: normalizeKanbanColumns(workspace.kanbanColumns),
         };
         serverRevision.current = workspace.revision;
-        lastSyncedPayload.current = JSON.stringify(remote);
+        const migratedCategories = remote.projects !== workspace.projects;
+        lastSyncedPayload.current = migratedCategories ? "" : JSON.stringify(remote);
         setTasks(remote.tasks);
         setProjects(remote.projects);
         setGoals(remote.goals);
@@ -938,7 +946,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         setWorkTracking(remote.workTracking);
         setKanbanColumns(remote.kanbanColumns);
         setFocusTask((current) => remote.tasks.find((task) => task.id === remote.focusTimer.taskId && isActionableTask(task)) ?? remote.tasks.find((task) => task.id === current?.id && isActionableTask(task)) ?? remote.tasks.find((task) => isActionableTask(task)) ?? null);
-        setSyncStatus("synced");
+        setSyncStatus(migratedCategories ? "syncing" : "synced");
       } catch {
         // Local state remains available; the online event will retry later.
       }
@@ -1057,7 +1065,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const priorities = filteredOpenTasks.filter((task) => task.priority === "Very High" || task.priority === "High");
   const activeProject = projectForId(projects, activeProjectId) ?? null;
   const heading = activeProject
-    ? { eyebrow: "Project workspace", title: activeProject.name, description: "Keep every task, decision, and next move in one clear orbit." }
+    ? { eyebrow: `Project workspace · ${projectCategory(activeProject)}`, title: activeProject.name, description: "Keep every task, decision, and next move in one clear orbit." }
     : activeView === "today"
       ? { ...VIEW_TITLES.today, eyebrow: localDateLabel, title: `${localGreeting}, ${sessionUser?.displayName.split(" ")[0] ?? "there"}` }
       : VIEW_TITLES[activeView];
@@ -1298,6 +1306,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       id: uniqueProjectId(name, projects),
       name,
       color: newProjectDraft.color,
+      category: newProjectDraft.category.trim() || suggestProjectCategory(name),
       description: newProjectDraft.description.trim() || "A clear space to move this outcome forward.",
     };
     const nextProjects = [...projects, project];
@@ -1313,6 +1322,17 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   function openRenameProject(project: Project) {
     setEditingProject(project);
     setProjectNameDraft(project.name);
+    setProjectCategoryDraft(projectCategory(project));
+  }
+
+  function saveProjectCategories(assignments: ProjectCategoryAssignment[]): string | null {
+    try {
+      const next = applyProjectCategoryAssignments(projects, assignments);
+      setProjects(next);
+      setProjectCategoriesOpen(false);
+      setToast("Parent categories saved");
+      return null;
+    } catch (error) { return error instanceof Error ? error.message : "Categories could not be saved."; }
   }
 
   function mergeSelectedProjects(request: ProjectMergeRequest): string | null {
@@ -1384,13 +1404,15 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       return;
     }
 
+    const category = projectCategoryDraft.trim().replace(/\s+/g, " ");
+    if (!category || category.length > 60) { setToast("Enter a parent category of 1–60 characters."); return; }
     const previousName = editingProject.name;
-    setProjects((current) => current.map((project) => project.id === editingProject.id ? { ...project, name: nextName } : project));
-    setTasks((current) => current.map((task) => task.project === previousName ? { ...task, project: nextName } : task));
+    setProjects((current) => current.map((project) => project.id === editingProject.id ? { ...project, name: nextName, category } : project));
+    setTasks((current) => current.map((task) => task.project === previousName && nextName !== previousName ? { ...task, project: nextName } : task));
     changeProjectFilter(projectFilter.map((name) => name === previousName ? nextName : name));
     setDraft((current) => current.project === previousName ? { ...current, project: nextName } : current);
     setEditingProject(null);
-    setToast(`Project renamed to ${nextName}`);
+    setToast(`Project updated: ${nextName}`);
   }
 
   function openEditTask(task: Task) {
@@ -1660,13 +1682,13 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             <button type="button" onClick={openNewProject} aria-label="Add project"><Plus size={15} /></button>
           </div>
           <div className="sidebar-project-list" aria-label={`${enabledProjects.length} active projects / priorities`}>
-            {enabledProjects.map((project) => (
+            {groupProjectsByCategory(enabledProjects).map(group => <details className="sidebar-project-category" key={group.name} open><summary><span>{group.name}</span><small>{group.projects.length}</small></summary>{group.projects.map((project) => (
               <button className={activeProject?.id === project.id ? "project-link active" : "project-link"} key={project.id} onClick={() => navigateProject(project)}>
                 <span className="project-dot" style={{ background: project.color }} />
                 <span>{project.name}</span>
                 <em>{tasks.filter((task) => task.project === project.name && isActionableTask(task)).length}</em>
               </button>
-            ))}
+            ))}</details>)}
           </div>
         </div>
 
@@ -1803,7 +1825,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           {activeView === "completed" && taskLayout === "original" && <ListView tasks={visibleTasks.filter((task) => task.completed)} projects={projects} title="A trail of progress" onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="Complete a task and it will appear here." />}
           {activeView === "projects" && (activeProject
             ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="This project is ready for its first task." />
-            : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} onToggleProject={toggleProjectDisabled} onMergeProjects={() => setProjectMergeOpen(true)} onViewProgress={() => openProjectProgress()} />)}
+            : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} onToggleProject={toggleProjectDisabled} onMergeProjects={() => setProjectMergeOpen(true)} onViewProgress={() => openProjectProgress()} onManageCategories={() => setProjectCategoriesOpen(true)} />)}
           {activeView === "projectProgress" && <ProjectProgressView tasks={tasks} projects={projects} initialProjectName={progressInitialProject} onEditTask={openEditTask} />}
           {activeView === "analytics" && <AnalyticsView tasks={tasks} focusHistory={focusHistory} karma={karma} dailyGoal={dailyGoal} onGoalChange={updateDailyGoal} />}
           {activeView === "timerHistory" && <TimerHistoryView focusHistory={focusHistory} search={search} now={clockNow} />}
@@ -1821,6 +1843,8 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         <BackToTop />
       </div>
 
+      <datalist id="project-category-options">{[...new Set([...PROJECT_CATEGORIES, ...projectCategoryNames(projects), "Other Priorities", "Uncategorized"])].map(name => <option key={name} value={name} />)}</datalist>
+      {projectCategoriesOpen && <ProjectCategoriesDialog projects={projects} onSave={saveProjectCategories} onClose={() => setProjectCategoriesOpen(false)} />}
       {projectMergeOpen && <ProjectMergeDialog projects={projects} tasks={tasks} onMerge={mergeSelectedProjects} onClose={() => setProjectMergeOpen(false)} />}
 
       {taskModalOpen && (
@@ -1883,6 +1907,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           <form className="task-modal project-create-modal" onSubmit={createProject} role="dialog" aria-modal="true" aria-labelledby="create-project-title">
             <div className="modal-header"><div><p className="eyebrow">Start a new outcome</p><h2 id="create-project-title">Create project</h2></div><button className="icon-button" type="button" onClick={() => setProjectModalOpen(false)} aria-label="Close"><X size={20} /></button></div>
             <label className="field-label">Project name<input autoFocus value={newProjectDraft.name} onChange={(event) => { setNewProjectDraft({ ...newProjectDraft, name: event.target.value }); setProjectCreateError(""); }} placeholder="e.g. Customer portal launch" maxLength={60} required /></label>
+            <label className="field-label">Parent category<input list="project-category-options" value={newProjectDraft.category} onChange={event => setNewProjectDraft({ ...newProjectDraft, category: event.target.value })} maxLength={60} placeholder="Suggest from the project name, or type a theme" /></label>
             <label className="field-label">Description<textarea value={newProjectDraft.description} onChange={(event) => setNewProjectDraft({ ...newProjectDraft, description: event.target.value })} placeholder="What does success look like?" maxLength={160} rows={3} /></label>
             <fieldset className="project-color-field">
               <legend>Project color</legend>
@@ -1905,10 +1930,11 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       {editingProject && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setEditingProject(null)}>
           <form className="task-modal project-rename-modal" onSubmit={renameProject}>
-            <div className="modal-header"><div><p className="eyebrow">Project settings</p><h2>Rename project</h2></div><button className="icon-button" type="button" onClick={() => setEditingProject(null)} aria-label="Close"><X size={20} /></button></div>
+            <div className="modal-header"><div><p className="eyebrow">Project settings</p><h2>Edit project</h2></div><button className="icon-button" type="button" onClick={() => setEditingProject(null)} aria-label="Close"><X size={20} /></button></div>
             <label className="field-label">Project name<input autoFocus value={projectNameDraft} onChange={(event) => setProjectNameDraft(event.target.value)} placeholder="Enter a project name" required /></label>
+            <label className="field-label">Parent category<input list="project-category-options" value={projectCategoryDraft} onChange={event => setProjectCategoryDraft(event.target.value)} maxLength={60} required /></label>
             <p className="rename-hint"><Pencil size={15} /> Every task in this project will be updated automatically. Its URL and progress history will stay the same.</p>
-            <div className="modal-actions"><span /><button className="secondary-button" type="button" onClick={() => setEditingProject(null)}>Cancel</button><button className="primary-button" type="submit">Save name<ArrowRight size={17} /></button></div>
+            <div className="modal-actions"><span /><button className="secondary-button" type="button" onClick={() => setEditingProject(null)}>Cancel</button><button className="primary-button" type="submit">Save project<ArrowRight size={17} /></button></div>
           </form>
         </div>
       )}
@@ -2406,94 +2432,6 @@ function TaskActions({ task, onEdit, onFocus }: { task: Task; onEdit: (task: Tas
           <button type="button" role="menuitem" onClick={() => { setOpen(false); onEdit(task); }}><Pencil size={15} /> Edit task</button>
           {isActionableTask(task) && <button type="button" role="menuitem" onClick={() => { setOpen(false); onFocus(task); }}><Zap size={15} /> Start focus</button>}
         </div>
-      )}
-    </div>
-  );
-}
-
-function ProjectsView({ tasks, projects, onCreateProject, onOpenProject, onRenameProject, onDeleteProject, onToggleProject, onMergeProjects, onViewProgress }: { tasks: Task[]; projects: Project[]; onCreateProject: () => void; onOpenProject: (project: Project) => void; onRenameProject: (project: Project) => void; onDeleteProject: (project: Project) => void; onToggleProject: (project: Project) => void; onMergeProjects: () => void; onViewProgress: () => void }) {
-  const [layout, setLayout] = useState<"list" | "grid">("list");
-  const [status, setStatus] = useState<"all" | "active" | "disabled">("all");
-  const activeCount = projects.filter((project) => !project.disabled).length;
-  const disabledCount = projects.length - activeCount;
-  const statusFilters = [
-    { value: "all", label: "All", count: projects.length },
-    { value: "active", label: "Active", count: activeCount },
-    { value: "disabled", label: "Disabled", count: disabledCount },
-  ] as const;
-  const projectStats = projects.filter((project) => status === "all" || (status === "disabled" ? project.disabled : !project.disabled)).map((project) => {
-    const projectTasks = tasks.filter((task) => task.project === project.name);
-    const completed = projectTasks.filter((task) => task.completed).length;
-    return {
-      ...project,
-      taskCount: projectTasks.length,
-      openCount: projectTasks.filter(isActionableTask).length,
-      percent: projectTasks.some(task => task.status !== "na") ? Math.round(completed / projectTasks.filter(task => task.status !== "na").length * 100) : 0,
-    };
-  });
-
-  return (
-    <div className="projects-view">
-      <div className="projects-toolbar">
-        <div>
-          <p className="eyebrow">Portfolio overview</p>
-          <h2>{activeCount} active · {disabledCount} disabled</h2>
-        </div>
-        <div className="projects-toolbar-actions">
-          <button className="secondary-button" type="button" onClick={onViewProgress}><TrendingUp size={16} /> View progress</button>
-          <button className="secondary-button" type="button" onClick={onMergeProjects} disabled={projects.length < 2}><Merge size={16} /> Merge projects</button>
-          <button className="primary-button" type="button" onClick={onCreateProject}><Plus size={16} /> New project</button>
-          <div className="project-view-switch" role="group" aria-label="Project layout">
-            <button type="button" className={layout === "list" ? "active" : ""} onClick={() => setLayout("list")} aria-pressed={layout === "list"}><Rows3 size={16} /> List</button>
-            <button type="button" className={layout === "grid" ? "active" : ""} onClick={() => setLayout("grid")} aria-pressed={layout === "grid"}><LayoutGrid size={16} /> Grid</button>
-          </div>
-        </div>
-      </div>
-
-      <div className="project-status-toolbar">
-        <div className="project-view-switch" role="group" aria-label="Project status">
-          {statusFilters.map((filter) => <button key={filter.value} type="button" className={status === filter.value ? "active" : ""} aria-pressed={status === filter.value} onClick={() => setStatus(filter.value)}>{filter.label} ({filter.count})</button>)}
-        </div>
-        <p>Disabled projects keep every task and stay out of active planning.</p>
-      </div>
-
-      {projectStats.length === 0 && <div className="empty-list"><Folder size={30} /><h3>{status === "disabled" ? "No disabled projects" : status === "active" ? "No active projects" : "No projects yet"}</h3><p>{status === "disabled" ? "Projects you disable will appear here, ready to re-enable." : "Create a project or re-enable one from the All view."}</p></div>}
-
-      {layout === "list" ? (
-        <section className="project-list" aria-label="Projects / Priorities list">
-          {projectStats.map((project) => (
-            <article className={`project-list-row${project.disabled ? " project-disabled" : ""}`} key={project.id}>
-              <button className="project-list-main" type="button" onClick={() => onOpenProject(project)}>
-                <span className="project-list-icon" style={{ background: `${project.color}18`, color: project.color }}><Folder size={20} /></span>
-                <span className="project-list-copy"><strong>{project.name}</strong><small>{project.description}</small><span className={`project-status-badge${project.disabled ? " disabled" : ""}`}>{project.disabled ? "Disabled" : "Active"}</span></span>
-              </button>
-              <div className="project-list-metrics">
-                <span><strong>{project.openCount}</strong><small>Open</small></span>
-                <span><strong>{project.taskCount}</strong><small>Total</small></span>
-              </div>
-              <div className="project-list-progress">
-                <div><span>Progress</span><strong>{project.percent}%</strong></div>
-                <i><span style={{ width: `${project.percent}%`, background: project.color }} /></i>
-              </div>
-              <div className="project-list-actions"><button className="project-lifecycle-button" type="button" onClick={() => { onToggleProject(project); if (status !== "all") setStatus("all"); }} aria-label={`${project.disabled ? "Re-enable" : "Disable"} ${project.name}`}>{project.disabled ? <Play size={13} /> : <Pause size={13} />}{project.disabled ? "Re-enable" : "Disable"}</button><button className="project-list-delete" type="button" onClick={() => onDeleteProject(project)} aria-label={`Delete ${project.name}`}><Trash2 size={16} /></button><button className="project-list-edit" type="button" onClick={() => onRenameProject(project)} aria-label={`Rename ${project.name}`}><Pencil size={16} /></button><button className="project-list-open" type="button" onClick={() => onOpenProject(project)} aria-label={`Open ${project.name}`}><ArrowRight size={17} /></button></div>
-            </article>
-          ))}
-        </section>
-      ) : (
-        <section className="project-grid" aria-label="Projects / Priorities grid">
-          {projectStats.map((project, index) => (
-            <article className={`project-card project-${index + 1}${project.disabled ? " project-disabled" : ""}`} key={project.id}>
-              <div className="project-card-top"><span className="project-symbol"><Folder size={21} /></span><div className="project-card-actions"><button className="project-card-delete" type="button" onClick={() => onDeleteProject(project)} aria-label={`Delete ${project.name}`}><Trash2 size={17} /></button><button type="button" onClick={() => onRenameProject(project)} aria-label={`Rename ${project.name}`}><Pencil size={18} /></button></div></div>
-              <p className="eyebrow">{project.taskCount} tasks</p>
-              <span className={`project-status-badge${project.disabled ? " disabled" : ""}`}>{project.disabled ? "Disabled" : "Active"}</span>
-              <h2>{project.name}</h2>
-              <p>{project.description}</p>
-              <div className="project-progress"><div><span>Progress</span><strong>{project.percent}%</strong></div><i><span style={{ width: `${project.percent}%`, background: project.color }} /></i></div>
-              <button className="project-open" type="button" onClick={() => onOpenProject(project)}>Open project <ArrowRight size={16} /></button>
-              <button className="project-lifecycle-button" type="button" onClick={() => { onToggleProject(project); if (status !== "all") setStatus("all"); }} aria-label={`${project.disabled ? "Re-enable" : "Disable"} ${project.name}`}>{project.disabled ? <Play size={14} /> : <Pause size={14} />}{project.disabled ? "Re-enable" : "Disable"}</button>
-            </article>
-          ))}
-        </section>
       )}
     </div>
   );
