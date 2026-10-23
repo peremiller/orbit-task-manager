@@ -113,3 +113,76 @@ test("category bundles and timeline columns reconcile for every period and filte
     }
   }
 });
+
+test("multi-day columns use the requested October 23 anchor without restarting at period boundaries", () => {
+  for (const columnDays of [2, 3]) {
+    const result = buildProjectProgress([], projects, { ...options, columnDays });
+    const batch = result.buckets.find(bucket => bucket.start === "2026-10-23");
+    assert.equal(batch.end, columnDays === 2 ? "2026-10-24" : "2026-10-25");
+    assert.equal(result.buckets.find(bucket => bucket.start === (columnDays === 2 ? "2026-10-25" : "2026-10-26")).end, columnDays === 2 ? "2026-10-26" : "2026-10-28");
+    assert.equal(result.buckets.find(bucket => bucket.start === (columnDays === 2 ? "2026-10-27" : "2026-10-29")).end, columnDays === 2 ? "2026-10-28" : "2026-10-31");
+    for (const anchor of ["2026-01-01", "2026-11-01", "2027-01-01", "2024-02-29"]) {
+      const data = buildProjectProgress([], projects, { ...options, anchor, columnDays });
+      assert.ok(data.buckets[0].start <= data.start);
+      assert.ok(data.buckets.at(-1).end >= data.end);
+      for (const [index, bucket] of data.buckets.entries()) {
+        const daysFromAnchor = (Date.parse(bucket.start) - Date.parse("2026-10-23")) / 86_400_000;
+        assert.equal(Math.abs(daysFromAnchor % columnDays), 0);
+        assert.equal((Date.parse(bucket.end) - Date.parse(bucket.start)) / 86_400_000, columnDays - 1);
+        if (index) assert.equal(Date.parse(bucket.start) - Date.parse(data.buckets[index - 1].end), 86_400_000);
+      }
+    }
+  }
+});
+
+test("multi-day counts reconcile across filters and exclude outside-period, future and N/A records", () => {
+  const source = [task(1, "A", "2026-10-23"), task(2, "A", "2026-10-24"), task(3, "A", "2026-10-25"), task(4, "B", "2026-10-26"), task(5, "A", "2026-11-01"), { ...task(6, "A", "2026-10-24"), status: "na" }];
+  for (const columnDays of [2, 3]) {
+    for (const period of ["week", "month", "quarter", "year"]) {
+      for (const status of ["all", "active", "disabled"]) {
+        for (const projectId of ["", "a", "b"]) {
+          const settings = { ...options, today: "2026-10-26", columnDays, period, status, projectId };
+          const result = buildProjectProgress(source, projects, settings);
+          const original = buildProjectProgress(source, projects, { ...settings, columnDays: undefined });
+          assert.deepEqual(result.completions, original.completions);
+          assert.deepEqual(result.days, original.days);
+          assert.deepEqual(result.weekdays, original.weekdays);
+          const summary = summarizeProgressRows(result.rows);
+          assert.equal(summary.counts.reduce((sum, count) => sum + count, 0), result.totalCompleted);
+          assert.equal(result.openTasks, original.openTasks);
+        }
+      }
+    }
+    const month = buildProjectProgress(source, projects, { ...options, today: "2026-11-02", columnDays });
+    assert.equal(month.totalCompleted, 4); // November 1 never leaks into October's boundary column.
+    const now = buildProjectProgress(source, projects, { ...options, today: "2026-10-24", columnDays });
+    const index = now.buckets.findIndex(bucket => bucket.start === "2026-10-23");
+    assert.equal(now.buckets[index].future, false);
+    assert.equal(now.rows[0].counts[index], 2);
+    const future = buildProjectProgress(source, projects, { ...options, anchor: "2026-11-01", today: "2026-10-31", columnDays });
+    assert.ok(future.buckets.every(bucket => bucket.future));
+  }
+});
+
+test("single dates and inclusive custom ranges drive the same category completions as the timelines", () => {
+  assert.deepEqual(progressWindow("2026-10-23", "day"), { start: "2026-10-23", end: "2026-10-23" });
+  assert.deepEqual(progressWindow("2026-10-23", "range", "2026-11-02"), { start: "2026-10-23", end: "2026-11-02" });
+  assert.throws(() => progressWindow("2026-10-23", "range", "2026-10-22"));
+  assert.throws(() => progressWindow("2026-10-23", "range", "2026-02-30"));
+  assert.equal(moveProgressPeriod("2026-12-31", "day", 1), "2027-01-01");
+  assert.equal(moveProgressPeriod("2026-10-23", "range", 1, "2026-10-25"), "2026-10-26");
+  assert.equal(moveProgressPeriod("2026-10-23", "range", -1, "2026-10-25"), "2026-10-20");
+  const categorized = projects.map(project => ({ ...project, category: project.id === "a" ? "Learning" : "Work" }));
+  const source = [task(1, "A", "2026-10-22T15:59:59Z"), task(2, "A", "2026-10-22T16:00:00Z"), task(3, "B", "2026-10-25T15:59:59Z"), task(4, "B", "2026-10-25T16:00:00Z")];
+  for (const columnDays of [undefined, 2, 3]) {
+    const day = buildProjectProgress(source, categorized, { ...options, period: "day", today: "2026-10-30", columnDays });
+    assert.deepEqual(day.completions.map(item => item.task.id), [2]);
+    const range = buildProjectProgress(source, categorized, { ...options, period: "range", rangeEnd: "2026-10-25", today: "2026-10-30", columnDays });
+    assert.deepEqual(range.completions.map(item => item.task.id), [2, 3]);
+    assert.equal(summarizeProgressRows(range.rows).counts.reduce((sum, value) => sum + value, 0), 2);
+    const groups = groupProjectsByCategory(range.rows.map(row => ({ ...row.project, row })));
+    assert.deepEqual(groups.map(group => [group.name, summarizeProgressRows(group.projects.map(project => project.row)).periodCompleted]), [["Learning", 1], ["Work", 1]]);
+    const filtered = filterProjectCategory(source, categorized, "Learning");
+    assert.equal(buildProjectProgress(filtered.tasks, filtered.projects, { ...options, period: "range", rangeEnd: "2026-10-25", today: "2026-10-30", columnDays }).totalCompleted, 1);
+  }
+});

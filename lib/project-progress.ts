@@ -1,9 +1,11 @@
 import type { Project } from "./projects";
 
-export type ProgressPeriod = "week" | "month" | "quarter" | "year";
+export type ProgressPeriod = "day" | "range" | "week" | "month" | "quarter" | "year";
 export const PROGRESS_TIME_ZONE = "Asia/Manila";
 export const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAY_MS = 86_400_000;
+// Keep multi-day columns aligned across weeks, months, quarters, and years.
+const TIMELINE_BATCH_ANCHOR = Date.UTC(2026, 9, 23);
 const manilaDate = new Intl.DateTimeFormat("en-CA", { timeZone: PROGRESS_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
 
 export type ProgressTask = { id: number; title: string; project: string; completed: boolean; status?: string; completedAt?: string };
@@ -30,9 +32,14 @@ export function completionDateKey(value?: string): string | null {
   return Number.isNaN(date.getTime()) ? null : manilaDate.format(date);
 }
 
-export function progressWindow(anchor: string, period: ProgressPeriod) {
+export function progressWindow(anchor: string, period: ProgressPeriod, rangeEnd = anchor) {
   const start = calendarDate(anchor);
   if (!start) throw new Error("Choose a valid calendar date.");
+  if (period === "day") return { start: anchor, end: anchor };
+  if (period === "range") {
+    if (!calendarDate(rangeEnd) || rangeEnd < anchor) throw new Error("Choose an end date on or after the start date.");
+    return { start: anchor, end: rangeEnd };
+  }
   if (period === "week") start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
   else if (period === "month") start.setUTCDate(1);
   else if (period === "quarter") { start.setUTCDate(1); start.setUTCMonth(Math.floor(start.getUTCMonth() / 3) * 3); }
@@ -45,7 +52,12 @@ export function progressWindow(anchor: string, period: ProgressPeriod) {
   return { start: dateKey(start), end: dateKey(new Date(end.getTime() - DAY_MS)) };
 }
 
-export function moveProgressPeriod(anchor: string, period: ProgressPeriod, step: number) {
+export function moveProgressPeriod(anchor: string, period: ProgressPeriod, step: number, rangeEnd = anchor) {
+  if (period === "day") return shiftProgressDay(anchor, step);
+  if (period === "range") {
+    const window = progressWindow(anchor, period, rangeEnd);
+    return shiftProgressDay(anchor, step * (Math.round((calendarDate(window.end)!.getTime() - calendarDate(window.start)!.getTime()) / DAY_MS) + 1));
+  }
   const date = calendarDate(progressWindow(anchor, period).start)!;
   if (period === "week") date.setUTCDate(date.getUTCDate() + step * 7);
   else if (period === "year") date.setUTCFullYear(date.getUTCFullYear() + step);
@@ -79,10 +91,10 @@ export function summarizeProgressRows(rows: readonly ProgressTotals[]) {
   return { ...totals, percent: totals.total ? Math.round(totals.done / totals.total * 100) : null };
 }
 
-export function buildProjectProgress<T extends ProgressTask>(tasks: T[], projects: Project[], options: { period: ProgressPeriod; anchor: string; projectId?: string; status?: "all" | "active" | "disabled"; today?: string }) {
+export function buildProjectProgress<T extends ProgressTask>(tasks: T[], projects: Project[], options: { period: ProgressPeriod; anchor: string; rangeEnd?: string; projectId?: string; status?: "all" | "active" | "disabled"; today?: string; columnDays?: 2 | 3 }) {
   const { period, anchor } = options;
   const today = options.today ?? progressToday();
-  const window = progressWindow(anchor, period);
+  const window = progressWindow(anchor, period, options.rangeEnd);
   const population = progressProjects(tasks, projects).filter((project) => (!options.projectId || project.id === options.projectId) && (!options.status || options.status === "all" || (options.status === "disabled" ? project.disabled : !project.disabled)));
   const names = new Set(population.map((project) => project.name));
   const scopedTasks = tasks.filter((task) => names.has(task.project));
@@ -97,10 +109,14 @@ export function buildProjectProgress<T extends ProgressTask>(tasks: T[], project
   }
   const days = [];
   for (let date = window.start; date <= window.end; date = shiftProgressDay(date, 1)) days.push({ date, count: dayCounts.get(date) ?? 0, future: date > today });
-  const buckets: { start: string; end: string; label: string }[] = [];
-  for (let start = window.start; start <= window.end;) {
-    const end = period === "year" ? progressWindow(start, "month").end : period === "quarter" ? [shiftProgressDay(start, 6), window.end].sort()[0] : start;
-    buckets.push({ start, end, label: period === "year" ? progressDateLabel(start, { month: "short" }) : period === "quarter" ? progressDateLabel(start) : progressDateLabel(start, { day: "numeric" }) });
+  const buckets: { start: string; end: string; label: string; future: boolean }[] = [];
+  const columnDays = options.columnDays;
+  const offset = Math.round((calendarDate(window.start)!.getTime() - TIMELINE_BATCH_ANCHOR) / DAY_MS);
+  const firstStart = columnDays ? shiftProgressDay(window.start, -((offset % columnDays + columnDays) % columnDays)) : window.start;
+  for (let start = firstStart; start <= window.end;) {
+    const end = columnDays ? shiftProgressDay(start, columnDays - 1) : period === "year" ? progressWindow(start, "month").end : period === "quarter" ? [shiftProgressDay(start, 6), window.end].sort()[0] : start;
+    const label = columnDays ? `${progressDateLabel(start)} – ${progressDateLabel(end, start.slice(0, 7) === end.slice(0, 7) ? { day: "numeric" } : { month: "short", day: "numeric" })}` : period === "year" ? progressDateLabel(start, { month: "short" }) : period === "quarter" ? progressDateLabel(start) : progressDateLabel(start, { day: "numeric" });
+    buckets.push({ start, end, label, future: (start < window.start ? window.start : start) > today });
     start = shiftProgressDay(end, 1);
   }
   const rows = population.map((project) => {

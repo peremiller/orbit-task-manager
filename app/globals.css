@@ -1638,3 +1638,35 @@ kbd { font-family: inherit; }
 @media (max-width: 760px) {
   .project-category-bundles { columns: 1; }.project-category-bundle { padding: 16px; margin-bottom: 15px; }.category-bundle-heading h3 { font-size: 16px; }
 }
+
+/* Multi-day timeline ranges stay readable and the four layout choices wrap on mobile. */
+.progress-layout-switch { flex-wrap: wrap; max-width: 100%; }
+.progress-layout-switch button { white-space: nowrap; }
+.progress-batched-table th:nth-child(n+4) { min-width: 90px; white-space: nowrap; }
+
+.progress-period-switch { flex-wrap: wrap; }
+.progress-orbit-panel h3 { margin: 0 0 7px; font-size: 16px; }
+.progress-orbit-grid { display: grid; grid-template-columns: minmax(260px, 1.25fr) minmax(250px, 1fr); gap: 24px; align-items: center; }
+.progress-orbit-map { display: block; width: 100%; max-height: 600px; }
+.progress-orbit-ring { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.progress-orbit-ring.inner { stroke-dasharray: 3 8; }
+.progress-orbit-core { fill: var(--paper); stroke: var(--blue); stroke-width: 1.5; }
+.progress-orbit-total { fill: var(--ink); font-size: 32px; font-weight: 750; }
+.progress-orbit-caption, .progress-orbit-node-label { fill: var(--muted); font-size: 11px; }
+.progress-orbit-node-count { fill: #fff; font-size: 14px; font-weight: 700; }
+.progress-orbit-zero { fill: var(--muted); font-size: 11px; }
+.progress-orbit-leader { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 12px 14px; border-radius: 10px; background: var(--blue-soft); font-size: 12px; line-height: 1.6; }
+.progress-orbit-key { list-style: none; margin: 0; padding: 0; max-height: 580px; overflow-y: auto; }
+.progress-orbit-key li + li { border-top: 1px solid var(--line); }
+.progress-orbit-key button { display: flex; width: 100%; gap: 12px; align-items: center; padding: 13px 7px; border: 0; border-radius: 8px; color: var(--ink); background: transparent; text-align: left; }
+.progress-orbit-key button:hover { background: var(--blue-soft); }
+.progress-orbit-key button:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.progress-orbit-key-number { font-size: 11px; font-weight: 700; }
+.progress-orbit-key-copy { flex: 1; min-width: 0; }
+.progress-orbit-key-copy strong { display: block; font-size: 12px; overflow-wrap: anywhere; }
+.progress-orbit-key small { display: block; margin-top: 4px; font-size: 10px; color: var(--muted); }
+.progress-orbit-key-copy i { display: block; height: 4px; margin-top: 8px; border-radius: 8px; background: var(--line); overflow: hidden; }
+.progress-orbit-key-copy b { display: block; height: 100%; border-radius: 8px; }
+.progress-orbit-key-value { text-align: right; min-width: 40px; }
+.progress-orbit-key-value strong { font-size: 16px; }
+@media (max-width: 800px) { .progress-orbit-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; } .progress-orbit-map { max-height: 440px; } .progress-orbit-key { max-height: none; } }
