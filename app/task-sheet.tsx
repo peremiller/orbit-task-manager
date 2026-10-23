@@ -4,12 +4,14 @@ import { CheckCircle2, Clock3, CalendarDays, Pencil, Plus, Target } from "lucide
 import { Fragment, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import type { Task, TaskStatus } from "./page";
 import { isActionableTask, TASK_STATUS_LABELS } from "@/lib/task-status";
+import { projectCategory } from "@/lib/projects";
 
 export type TaskCellPatch = Partial<Pick<Task, "title" | "project" | "notes">>;
 
 type Props = {
   tasks: Task[];
   projects: { name: string }[];
+  parentCategories?: ReadonlyMap<string, string>;
   title: string;
   groupByDue?: boolean;
   planner?: boolean;
@@ -75,7 +77,7 @@ function EditableCell({ value, label, multiline = false, required = false, onSav
     : <input {...props} ref={element => { editor.current = element; }} required={required} maxLength={500} />;
 }
 
-export function TaskSheet({ tasks, projects, title, groupByDue = false, planner = false, empty = "Add a task or adjust your filters to see work here.", onAdd, onEdit, onStatusChange, onCellChange }: Props) {
+export function TaskSheet({ tasks, projects, parentCategories, title, groupByDue = false, planner = false, empty = "Add a task or adjust your filters to see work here.", onAdd, onEdit, onStatusChange, onCellChange }: Props) {
   const dueDates = Array.from(new Set(tasks.map(task => task.due)));
   const days = [...DUE_ORDER.filter(day => dueDates.includes(day)), ...dueDates.filter(day => !DUE_ORDER.includes(day)).sort()];
   const groups = groupByDue ? days.map(day => ({ name: day, tasks: tasks.filter(task => task.due === day) })) : [{ name: "", tasks }];
@@ -91,15 +93,16 @@ export function TaskSheet({ tasks, projects, title, groupByDue = false, planner 
     <section className="task-sheet" aria-label={title}>
       <div className="task-sheet-heading"><div><h2>{title}</h2><p>{tasks.length} {tasks.length === 1 ? "task" : "tasks"} · Click a cell to edit</p></div><button type="button" className="secondary-button" onClick={onAdd}><Plus size={15} />Add task</button></div>
       <div className="task-sheet-scroll" tabIndex={0} role="region" aria-label="Task sheet, scroll to see all columns">
-        <table className="task-sheet-table">
-          <caption className="sheet-sr-only">{title}. Workstream is the task’s project. Remarks are its notes. Status changes save automatically.</caption>
-          <colgroup><col className="sheet-workstream-col" /><col className="sheet-task-col" /><col className="sheet-status-col" /><col className="sheet-date-col" /><col className="sheet-remarks-col" /></colgroup>
-          <thead><tr><th scope="col">Workstream</th><th scope="col">Task</th><th scope="col">Status</th><th scope="col">Date Completed</th><th scope="col">Remarks</th></tr></thead>
+        <table className={`task-sheet-table${parentCategories ? " with-parent-category" : ""}`}>
+          <caption className="sheet-sr-only">{title}. Workstream is the task’s project. {parentCategories ? "Parent category is inherited from the project / priority and updates when its workstream changes. " : ""}Remarks are its notes. Status changes save automatically.</caption>
+          <colgroup>{parentCategories && <col className="sheet-parent-category-col" />}<col className="sheet-workstream-col" /><col className="sheet-task-col" /><col className="sheet-status-col" /><col className="sheet-date-col" /><col className="sheet-remarks-col" /></colgroup>
+          <thead><tr>{parentCategories && <th scope="col">Parent category</th>}<th scope="col">Workstream</th><th scope="col">Task</th><th scope="col">Status</th><th scope="col">Date Completed</th><th scope="col">Remarks</th></tr></thead>
           <tbody>{groups.map(group => <Fragment key={group.name}>
-            {groupByDue && <tr className="sheet-group-row"><th scope="rowgroup" colSpan={5}><span>{group.name}</span><small>{group.tasks.length} {group.tasks.length === 1 ? "task" : "tasks"}{planner ? ` · ${duration(group.tasks.filter(isActionableTask).reduce((total, task) => total + task.duration, 0))} planned · 8h daily guide` : ""}</small></th></tr>}
+            {groupByDue && <tr className="sheet-group-row"><th scope="rowgroup" colSpan={parentCategories ? 6 : 5}><span>{group.name}</span><small>{group.tasks.length} {group.tasks.length === 1 ? "task" : "tasks"}{planner ? ` · ${duration(group.tasks.filter(isActionableTask).reduce((total, task) => total + task.duration, 0))} planned · 8h daily guide` : ""}</small></th></tr>}
             {group.tasks.map(task => {
               const status = task.completed ? "done" : task.status;
               return <tr key={task.id} data-task-id={task.id}>
+                {parentCategories && <td className="sheet-parent-category">{parentCategories.get(task.project) ?? projectCategory({ name: task.project })}</td>}
                 <td><select className="sheet-workstream" aria-label={`Workstream for ${task.title}`} value={task.project} onChange={event => onCellChange(task.id, { project: event.target.value })}>
                   {!projects.some(project => project.name === task.project) && <option value={task.project}>{task.project || "No workstream"}</option>}
                   {projects.map(project => <option key={project.name} value={project.name}>{project.name}</option>)}

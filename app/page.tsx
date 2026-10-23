@@ -1812,6 +1812,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           {["inbox", "upcoming", "planner", "completed"].includes(activeView) && taskLayout === "sheet" && <TaskSheet
             tasks={visibleTasks.filter(inTaskList)}
             projects={enabledProjects} title={`${VIEW_TITLES[activeView].title} task sheet`}
+            parentCategories={activeView === "inbox" ? new Map(projects.map(project => [project.name, projectCategory(project)])) : undefined}
             groupByDue={activeView === "upcoming" || activeView === "planner"} planner={activeView === "planner"}
             empty={activeView === "completed" ? "Complete a task and it will appear here, with its completion date." : undefined}
             onAdd={openNewTask} onEdit={openEditTask} onStatusChange={moveTask} onCellChange={updateTaskCell}

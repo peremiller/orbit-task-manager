@@ -148,6 +148,14 @@
 .sheet-status-col { width: 16%; }
 .sheet-date-col { width: 15%; }
 .sheet-remarks-col { width: 18%; }
+.task-sheet-table.with-parent-category { min-width: 1200px; }
+.with-parent-category .sheet-parent-category-col { width: 16%; }
+.with-parent-category .sheet-workstream-col { width: 18%; }
+.with-parent-category .sheet-task-col { width: 27%; }
+.with-parent-category .sheet-status-col { width: 13%; }
+.with-parent-category .sheet-date-col { width: 12%; }
+.with-parent-category .sheet-remarks-col { width: 14%; }
+.sheet-parent-category { font-size: 12px; line-height: 1.5; }
 .task-sheet-table thead th { position: sticky; top: 0; z-index: 2; padding: 11px 12px; border-right: 1px solid #454545; border-bottom: 4px solid #dadada; background: #080808; color: #fff; text-align: left; font-size: 15px; font-weight: 700; white-space: nowrap; }
 .task-sheet-table td { height: 47px; padding: 5px 10px; border-right: 1px solid #dedfe2; border-bottom: 1px solid #dedfe2; vertical-align: middle; background: #fff; overflow-wrap: anywhere; }
 .task-sheet-table tr > :last-child { border-right: 0; }
