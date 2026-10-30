@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { ORBIT_SESSION_COOKIE, safeReturnTo, verifyOrbitSession } from "./lib/orbit-auth";
 
-const PUBLIC_PATHS = new Set(["/login", "/api/auth/login", "/api/auth/logout", "/api/auth/session", "/manifest.webmanifest", "/sw.js", "/offline", "/offline/", "/offline-sw.js", "/offline-client.js", "/offline.css", "/offline-report.json"]);
+const PUBLIC_PATHS = new Set(["/login", "/api/auth/login", "/api/auth/logout", "/api/auth/session", "/manifest.webmanifest", "/sw.js", "/offline", "/offline/", "/offline-sw.js", "/offline-client.js", "/offline.css", "/offline-report.json", "/index.html"]);
 
 function clearInvalidSession(response: NextResponse, hasSessionCookie: boolean) {
   if (!hasSessionCookie) return response;
@@ -18,6 +18,9 @@ function clearInvalidSession(response: NextResponse, hasSessionCookie: boolean) 
 
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  // Enter the exact anonymous shell whose runtime/lazy assets are saved together.
+  // This keeps a first online local visit usable immediately after disconnection.
+  if (pathname === "/offline" || pathname === "/offline/") return NextResponse.redirect(new URL("/index.html" + search, request.url));
   const sessionCookie = request.cookies.get(ORBIT_SESSION_COOKIE)?.value;
   const user = verifyOrbitSession(sessionCookie);
 
