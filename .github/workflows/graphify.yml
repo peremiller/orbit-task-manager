@@ -15,7 +15,6 @@ concurrency:
 permissions:
   contents: read
   actions: read
-  models: read
 
 jobs:
   build-graph:
@@ -31,24 +30,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install Graphify
-        run: python -m pip install "graphifyy[openai,pdf,office,sql]"
+        run: python -m pip install "graphifyy"
 
-      - name: Build semantic graph
-        id: semantic
-        continue-on-error: true
-        env:
-          OPENAI_API_KEY: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_BASE_URL: https://models.github.ai/inference
-          OPENAI_MODEL: openai/gpt-4o
-        run: graphify extract . --backend openai --model openai/gpt-4o --max-concurrency 1
-
-      - name: Build deterministic fallback graph
-        if: steps.semantic.outcome != 'success'
+      - name: Build private deterministic graph
         run: graphify extract . --code-only --force
 
       - name: Record build metadata
         env:
-          GRAPHIFY_SEMANTIC_COMPLETE: ${{ steps.semantic.outcome == 'success' }}
+          GRAPHIFY_SEMANTIC_COMPLETE: "false"
         run: |
           python - <<'PY'
           import json
@@ -63,7 +52,8 @@ jobs:
               "ref": os.environ["GITHUB_REF"],
               "commit": os.environ["GITHUB_SHA"],
               "generated_at": datetime.now(timezone.utc).isoformat(),
-              "semantic_complete": os.environ["GRAPHIFY_SEMANTIC_COMPLETE"] == "true",
+              "semantic_complete": False,
+              "source_egress": False,
               "node_count": len(graph.get("nodes", [])),
               "edge_count": len(graph.get("edges", [])),
           }

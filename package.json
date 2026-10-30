@@ -4,10 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack && node scripts/build-offline.mjs",
     "start": "next start",
     "lint": "eslint . --ignore-pattern .next",
-    "test:projects": "node --experimental-strip-types --test tests/projects.test.mjs tests/project-progress.test.mjs tests/task-status.test.mjs tests/project-categories.test.mjs tests/inbox-orbits.test.mjs"
+    "test:projects": "node --experimental-strip-types --test tests/projects.test.mjs tests/project-progress.test.mjs tests/task-status.test.mjs tests/project-categories.test.mjs tests/inbox-orbits.test.mjs",
+    "prebuild": "node scripts/prepare-offline-build.mjs",
+    "test:offline": "node --experimental-strip-types --test tests/local-workspace.test.mjs tests/public-shell.test.mjs scripts/offline/offline.test.mjs scripts/offline/client.test.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "1.1.0",

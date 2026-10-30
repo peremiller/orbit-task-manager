@@ -33,6 +33,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           <label className="field-label">Password<input name="password" type="password" autoComplete="current-password" placeholder="Enter your password" required /></label>
           {query.error === "invalid" && <p className="login-error" role="alert">The username or password is incorrect. Please try again.</p>}
           <button className="login-submit" type="submit">Sign in <ArrowRight size={18} /></button>
+          <a href="/offline" className="secondary-button">Open browser-only workspace</a>
           <p className="login-device-note"><Cloud size={15} /> Tasks and projects sync securely anywhere you sign in.</p>
         </form>
       </section>

@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Caveat, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import ServiceWorkerRegistration from "./service-worker-registration";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -56,7 +55,8 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} ${handwriting.variable} antialiased`}
       >
         {children}
-        <ServiceWorkerRegistration />
+        <link rel="stylesheet" href="/offline.css" data-app-offline-style="" />
+        <script src="/offline-client.js" defer data-app-offline-client="" />
       </body>
     </html>
   );

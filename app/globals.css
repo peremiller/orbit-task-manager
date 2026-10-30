@@ -1770,3 +1770,6 @@ html :is(.tabs,.toolbar,.filter-bar,.filters,.actions,.button-row,.dialog-action
 @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } *,*::before,*::after { animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important; } }
 
 @media screen{html .analytics-hero{border-radius:12px}html .board-column{border-radius:10px}html .board-task{border-radius:8px}html .kanban-toolbar{row-gap:12px}html .board-task-footer{line-height:1.6}html .actual-entry-actions{row-gap:10px}}
+
+.offline-workspace-note { margin-bottom: 20px; padding: 16px; border: 1px solid var(--line, #ddd); border-radius: 16px; font-size: 14px; }
+.offline-workspace-note p { margin: 8px 0; }

@@ -77,6 +77,7 @@ import { changeTaskStatus, isActionableTask, TASK_STATUS_LABELS, type TaskStatus
 import { progressProjects } from "@/lib/project-progress";
 import { TaskSheet, type TaskCellPatch } from "./task-sheet";
 import { BackToTop } from "./back-to-top";
+import { readLocalWorkspace, saveLocalWorkspace, localNavigation, blockLocalApi } from "@/lib/offline/local-workspace";
 
 const InboxOrbitPanel = dynamic(() => import("./inbox-orbit-panel").then(module => module.InboxOrbitPanel), { loading: () => <aside className="inbox-orbit-panel" aria-label="Inbox circular orbit"><p role="status">Loading circular orbit…</p></aside> });
 
@@ -504,11 +505,11 @@ async function saveWorkspace(tasks: Task[], projects: Project[], goals: Goal[], 
   return response.json() as Promise<WorkspaceResponse>;
 }
 
-export default function Home({ initialView = "today", initialProjectId = null, initialProjectFilter = [] }: { initialView?: View; initialProjectId?: string | null; initialProjectFilter?: string[] }) {
+export default function Home({ initialView = "today", initialProjectId = null, initialProjectFilter = [], localOnly = false }: { localOnly?: boolean; initialView?: View; initialProjectId?: string | null; initialProjectFilter?: string[] }) {
   const router = useRouter();
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  const [tasks, setTasks] = useState<Task[]>(localOnly ? [] : INITIAL_TASKS);
   const [kanbanColumns, setKanbanColumns] = useState<KanbanColumn[]>(DEFAULT_KANBAN_COLUMNS);
-  const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
+  const [projects, setProjects] = useState<Project[]>(localOnly ? [] : INITIAL_PROJECTS);
   const enabledProjects = useMemo(() => projects.filter((project) => !project.disabled), [projects]);
   const activeTasks = useMemo(() => tasksForEnabledProjects(tasks, projects), [tasks, projects]);
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -560,9 +561,11 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   const [localDateLabel, setLocalDateLabel] = useState("");
   const [localGreeting, setLocalGreeting] = useState("Good morning");
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
+  const [localSaveError, setLocalSaveError] = useState("");
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("loading");
   const [syncRetry, setSyncRetry] = useState(0);
+  const localRevision = useRef<string | null>(null);
   const hydrated = useRef(false);
   const lastSyncedPayload = useRef("");
   const syncWasOffline = useRef(false);
@@ -591,6 +594,28 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   }, []);
 
   useEffect(() => {
+    if (!localOnly) return;
+    const restore = blockLocalApi(window);
+    function loadLocation() {
+      const query = new URLSearchParams(window.location.search);
+      const view = query.get("view") as View;
+      if (Object.hasOwn(VIEW_PATHS, view)) setActiveView(view);
+      setActiveProjectId(query.get("projectId"));
+    }
+    loadLocation(); window.addEventListener("popstate", loadLocation);
+    return () => { restore(); window.removeEventListener("popstate", loadLocation); };
+  }, [localOnly]);
+
+  function pushRoute(href: string) {
+    if (localOnly) window.history.pushState({}, "", localNavigation(href, VIEW_PATHS));
+    else router.push(href);
+  }
+
+  useEffect(() => {
+    if (localOnly) {
+      setSessionUser({ id: "device-only", username: "local", displayName: "Local workspace", role: "member", canEditSelectionManager: true });
+      return;
+    }
     let active = true;
     fetch("/api/auth/session", { cache: "no-store" })
       .then(async (response) => {
@@ -604,13 +629,30 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         if (active) window.location.replace(`/login?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
       });
     return () => { active = false; };
-  }, [router]);
+  }, [router, localOnly]);
 
   useEffect(() => {
     if (!sessionUser) return;
     const user = sessionUser;
     let active = true;
     hydrated.current = false;
+    if (localOnly) {
+      try {
+        const saved = readLocalWorkspace(window.localStorage);
+        localRevision.current = typeof saved?.revision === "string" ? saved.revision : null;
+        setTasks(Array.isArray(saved?.tasks) ? saved.tasks as Task[] : []);
+        setProjects(Array.isArray(saved?.projects) ? saved.projects as Project[] : []);
+        setGoals(normalizeGoals(saved?.goals));
+        setTodaySchedule(isScheduleWindow(saved?.schedule) ? saved.schedule as ScheduleWindow : DEFAULT_TODAY_SCHEDULE);
+        setFocusTimer(normalizeFocusTimer(saved?.focusTimer));
+        setFocusHistory(normalizeFocusHistory(saved?.focusHistory));
+        setWorkTracking(normalizeWorkTracking(saved?.workTracking));
+        setKanbanColumns(normalizeKanbanColumns(saved?.kanbanColumns));
+        setDailyGoal(clampDailyGoal(typeof saved?.dailyGoal === "number" ? saved.dailyGoal : null));
+      } catch { setLocalSaveError("An earlier local snapshot cannot be read. Its bytes are preserved; export a backup before recovering this browser."); }
+      hydrated.current = true; setSyncStatus("offline"); setWorkspaceReady(true);
+      return;
+    }
 
     async function hydrateWorkspace() {
       const taskKey = accountStorageKey("tasks", user.id);
@@ -777,7 +819,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
 
     void hydrateWorkspace();
     return () => { active = false; };
-  }, [sessionUser]);
+  }, [sessionUser, localOnly]);
 
   useEffect(() => {
     const loadProjectFilter = window.setTimeout(() => {
@@ -790,7 +832,12 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   }, []);
 
   useEffect(() => {
-    if (!hydrated.current || !sessionUser) return;
+    if (!hydrated.current || !sessionUser || !workspaceReady) return;
+    if (localOnly) {
+      try { localRevision.current = saveLocalWorkspace(window.localStorage, { tasks, projects, goals, schedule: todaySchedule, focusTimer, focusHistory, workTracking, kanbanColumns, dailyGoal }, localRevision.current); setLocalSaveError(""); }
+      catch (error) { setLocalSaveError(error instanceof Error && error.message.includes("Another tab") ? error.message + " Download a backup before reloading." : "This edit could not be saved on this device. The previous snapshot is preserved; export a backup before closing."); }
+      setSyncStatus("offline"); return;
+    }
     const payload = JSON.stringify({ tasks, projects, goals, schedule: todaySchedule, focusTimer, focusHistory, workTracking, kanbanColumns });
     try {
       window.localStorage.setItem(accountStorageKey("tasks", sessionUser.id), JSON.stringify(tasks));
@@ -834,11 +881,12 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [focusHistory, focusTimer, goals, projects, sessionUser, syncRetry, tasks, todaySchedule, workTracking, kanbanColumns]);
+  }, [focusHistory, focusTimer, goals, projects, sessionUser, syncRetry, tasks, todaySchedule, workTracking, kanbanColumns, localOnly, dailyGoal, workspaceReady]);
 
   useEffect(() => {
     if (!sessionUser) return;
     const user = sessionUser;
+    if (localOnly) return;
     const loadGoal = window.setTimeout(() => {
       try {
         setDailyGoal(clampDailyGoal(window.localStorage.getItem(`orbit-daily-goal-v1:${user.id}`)));
@@ -915,7 +963,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   }, [sessionUser]);
 
   useEffect(() => {
-    if (!sessionUser || !workspaceReady) return;
+    if (localOnly || !sessionUser || !workspaceReady) return;
     let active = true;
 
     async function refreshWorkspace() {
@@ -961,7 +1009,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
       active = false;
       window.clearInterval(interval);
     };
-  }, [sessionUser, workspaceReady]);
+  }, [sessionUser, workspaceReady, localOnly]);
 
   useEffect(() => {
     if (!toast) return;
@@ -1101,7 +1149,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
   function updateDailyGoal(value: number) {
     const goal = clampDailyGoal(value);
     setDailyGoal(goal);
-    if (sessionUser) {
+    if (sessionUser && !localOnly) {
       try {
         window.localStorage.setItem(`orbit-daily-goal-v1:${sessionUser.id}`, String(goal));
       } catch {
@@ -1137,7 +1185,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     setActiveView(view);
     setActiveProjectId(null);
     setMobileMenuOpen(false);
-    router.push(projectFilterHref(VIEW_PATHS[view], projectFilter));
+    pushRoute(projectFilterHref(VIEW_PATHS[view], projectFilter));
   }
 
   function openProjectProgress(project?: Project) {
@@ -1145,7 +1193,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     setActiveView("projectProgress");
     setActiveProjectId(null);
     setMobileMenuOpen(false);
-    router.push("/project-progress");
+    pushRoute("/project-progress");
   }
 
   function navigateProject(project: Project) {
@@ -1153,7 +1201,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     setActiveProjectId(project.id);
     changeProjectFilter([]);
     setMobileMenuOpen(false);
-    router.push(`/projects/${project.id}`);
+    pushRoute(`/projects/${project.id}`);
   }
 
   function toggleTheme() {
@@ -1332,7 +1380,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     setProjectModalOpen(false);
     setMobileMenuOpen(false);
     setToast(`${project.name} created`);
-    router.push(`/projects/${project.id}`);
+    pushRoute(`/projects/${project.id}`);
   }
 
   function openRenameProject(project: Project) {
@@ -1401,7 +1449,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
     if (activeProjectId === project.id) {
       setActiveProjectId(null);
       setActiveView("projects");
-      router.push("/projects");
+      pushRoute("/projects");
     }
     setDeletingProject(null);
     setFocusOpen(false);
@@ -1683,7 +1731,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
         <div className="sidebar-section">
           <div className="section-label">
             <Link
-              href={projectFilterHref("/projects", projectFilter)}
+              href={localOnly ? localNavigation("/projects", VIEW_PATHS) : projectFilterHref("/projects", projectFilter)} prefetch={!localOnly}
               className="section-label-link"
               aria-label="View all projects / priorities"
               aria-current={activeView === "projects" && !activeProjectId ? "page" : undefined}
@@ -1717,7 +1765,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
           <button className="nav-item"><Settings size={19} /><span>Settings</span></button>
           <p className={`local-save ${syncStatus}`}>
             {syncStatus === "offline" ? <CloudOff size={13} /> : syncStatus === "syncing" || syncStatus === "loading" ? <RotateCcw size={13} /> : <Cloud size={13} />}
-            {syncStatus === "offline" ? "Offline — changes cached" : syncStatus === "syncing" || syncStatus === "loading" ? "Syncing across devices…" : `Synced for ${sessionUser?.displayName ?? "your account"}`}
+            {localOnly ? (localSaveError ? "Local save needs attention" : "Saved on this device") : syncStatus === "offline" ? "Offline — changes cached" : syncStatus === "syncing" || syncStatus === "loading" ? "Syncing across devices…" : `Synced for ${sessionUser?.displayName ?? "your account"}`}
           </p>
         </div>
       </aside>
@@ -1740,12 +1788,17 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             <div className="profile">
               <div className="avatar">{userInitials(sessionUser?.displayName ?? "AJ Miller")}<span /></div>
               <div><strong>{sessionUser?.displayName ?? "AJ Miller"}</strong><small>@{sessionUser?.username ?? "aj.miller"}{sessionUser?.role ? ` · ${sessionUser.role[0].toUpperCase()}${sessionUser.role.slice(1)}` : ""}</small></div>
-              <form action="/api/auth/logout" method="post" onSubmit={() => navigator.serviceWorker?.controller?.postMessage({ type: "CLEAR_PRIVATE_CACHE" })}><button className="profile-logout" type="submit" aria-label="Sign out" title="Sign out"><LogOut size={17} /></button></form>
+              <form action={localOnly ? "/login" : "/api/auth/logout"} method={localOnly ? "get" : "post"} onSubmit={() => { if (!localOnly) navigator.serviceWorker?.controller?.postMessage({ type: "CLEAR_PRIVATE_CACHE" }); }}><button className="profile-logout" type="submit" aria-label="Sign out" title="Sign out"><LogOut size={17} /></button></form>
             </div>
           </div>
         </header>
 
         <div className="content">
+          {localOnly && <aside className="offline-workspace-note" aria-label="Local workspace status"><strong>Browser-only workspace</strong><p>Tasks, projects, goals, timers, boards and reports save automatically on this device. Account sign-in, cloud sync and file uploads need internet. This workspace is separate from every account.</p><a href="/login">Account sign in</a> · <button type="button" onClick={() => {
+            const recovery: Record<string, string | null> = {}; for (let i = 0; i < localStorage.length; i++) { const key = localStorage.key(i); if (key?.startsWith("orbit.device-conflict.v1:") || key === "orbit.device-workspace.v1") recovery[key] = localStorage.getItem(key); }
+            const blob = new Blob([JSON.stringify({ schema: 1, ...latestWorkspace.current, dailyGoal, recovery }, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = "orbit-local-backup.json"; link.click(); URL.revokeObjectURL(url);
+          }}>Download backup</button>{localSaveError && <p role="alert">{localSaveError}</p>}</aside>}
           <section className="page-heading">
             <div>
               <p className="eyebrow">{heading.eyebrow}</p>
@@ -1853,7 +1906,7 @@ export default function Home({ initialView = "today", initialProjectId = null, i
             ? <ListView tasks={visibleTasks.filter((task) => task.project === activeProject.name)} projects={projects} title={`${activeProject.name} tasks`} onToggle={toggleTask} onEdit={openEditTask} onFocus={openFocus} empty="This project is ready for its first task." />
             : <ProjectsView tasks={tasks} projects={projects} onCreateProject={openNewProject} onOpenProject={navigateProject} onRenameProject={openRenameProject} onDeleteProject={setDeletingProject} onToggleProject={toggleProjectDisabled} onMergeProjects={() => setProjectMergeOpen(true)} onViewProgress={() => openProjectProgress()} onManageCategories={() => setProjectCategoriesOpen(true)} />)}
           {activeView === "projectProgress" && <ProjectProgressView tasks={tasks} projects={projects} initialProjectName={progressInitialProject} onEditTask={openEditTask} />}
-          {activeView === "analytics" && <AnalyticsView tasks={tasks} focusHistory={focusHistory} karma={karma} dailyGoal={dailyGoal} onGoalChange={updateDailyGoal} />}
+          {activeView === "analytics" && <AnalyticsView tasks={tasks} focusHistory={focusHistory} karma={karma} dailyGoal={dailyGoal} onGoalChange={updateDailyGoal} onHistory={() => navigate("timerHistory")} />}
           {activeView === "timerHistory" && <TimerHistoryView focusHistory={focusHistory} search={search} now={clockNow} />}
           {activeView === "actuals" && <ActualsView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
           {activeView === "effortPlan" && <EffortPlanView state={workTracking} onChange={setWorkTracking} orbitTasks={tasks} personName={sessionUser?.displayName ?? "AJ Miller Perez"} />}
@@ -2467,7 +2520,7 @@ function TaskActions({ task, onEdit, onFocus }: { task: Task; onEdit: (task: Tas
   );
 }
 
-function AnalyticsView({ tasks, focusHistory, karma, dailyGoal, onGoalChange }: { tasks: Task[]; focusHistory: FocusHistoryEntry[]; karma: KarmaStats; dailyGoal: number; onGoalChange: (value: number) => void }) {
+function AnalyticsView({ tasks, focusHistory, karma, dailyGoal, onGoalChange, onHistory }: { tasks: Task[]; focusHistory: FocusHistoryEntry[]; karma: KarmaStats; dailyGoal: number; onGoalChange: (value: number) => void; onHistory: () => void }) {
   const completed = tasks.filter((task) => task.completed).length;
   const maxWeekCount = Math.max(1, ...karma.week.map((day) => day.count));
   const completedFocusSessions = focusHistory.filter((entry) => entry.status === "completed");
@@ -2510,7 +2563,7 @@ function AnalyticsView({ tasks, focusHistory, karma, dailyGoal, onGoalChange }: 
       </article>
       <article className="insight-card"><span className="stat-icon blue"><Sparkles size={20} /></span><p className="eyebrow">Orbit insight</p><h3>Your best work happens before noon.</h3><p>Use the balanced 10-hour plan to protect focused work, meetings, and review time without crowding the day.</p><button>Plan a focus block <ArrowRight size={15} /></button></article>
       <article className="focus-history-card">
-        <div className="card-title-row"><div><p className="eyebrow">Timer tracking</p><h3>Focus history</h3></div><Link className="history-link" href="/timer-history">View all <ArrowRight size={14} /></Link></div>
+        <div className="card-title-row"><div><p className="eyebrow">Timer tracking</p><h3>Focus history</h3></div><button className="history-link" type="button" onClick={onHistory}>View all <ArrowRight size={14} /></button></div>
         {focusHistory.length ? (
           <div className="focus-history-list">
             {focusHistory.slice(0, 10).map((entry) => (

@@ -32,3 +32,8 @@ pnpm-lock.yaml
 *.crt
 credentials*
 secrets*
+
+.offline-public/
+/public/offline-*
+/public/offline.css
+/public/index.html

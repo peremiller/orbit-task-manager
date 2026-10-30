@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { ORBIT_SESSION_COOKIE, safeReturnTo, verifyOrbitSession } from "./lib/orbit-auth";
 
-const PUBLIC_PATHS = new Set(["/login", "/api/auth/login", "/api/auth/logout", "/api/auth/session", "/manifest.webmanifest", "/sw.js"]);
+const PUBLIC_PATHS = new Set(["/login", "/api/auth/login", "/api/auth/logout", "/api/auth/session", "/manifest.webmanifest", "/sw.js", "/offline", "/offline/", "/offline-sw.js", "/offline-client.js", "/offline.css", "/offline-report.json"]);
 
 function clearInvalidSession(response: NextResponse, hasSessionCookie: boolean) {
   if (!hasSessionCookie) return response;
@@ -24,7 +24,7 @@ export function proxy(request: NextRequest) {
   if (pathname === "/login" && user) {
     return NextResponse.redirect(new URL(safeReturnTo(request.nextUrl.searchParams.get("returnTo")), request.url));
   }
-  if (PUBLIC_PATHS.has(pathname)) return NextResponse.next();
+  if (PUBLIC_PATHS.has(pathname) || pathname.startsWith("/offline-packs/") || pathname.startsWith("/offline-assets/")) return NextResponse.next();
   if (user) return NextResponse.next();
 
   if (pathname.startsWith("/api/")) {

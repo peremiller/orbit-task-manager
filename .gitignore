@@ -8,3 +8,8 @@ npm-debug.log*
 .DS_Store
 *.tsbuildinfo
 .vercel
+
+.offline-public/
+/public/offline-*
+/public/offline.css
+/public/index.html
