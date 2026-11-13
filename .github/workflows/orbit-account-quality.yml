@@ -6,6 +6,7 @@ on:
       - "lib/orbit-auth.ts"
       - "app/api/auth/login/route.ts"
       - "tests/auth-safety.test.mjs"
+      - "tests/login-browser.spec.mjs"
       - ".github/workflows/orbit-account-quality.yml"
   workflow_dispatch:
 jobs:
@@ -34,3 +35,12 @@ jobs:
         run: npm run build
       - name: Existing offline preservation regressions
         run: npm run test:offline
+      - name: Install pinned Chromium smoke runner
+        run: |
+          npm install --no-save --no-package-lock @playwright/test@1.58.2
+          npx playwright install --with-deps chromium
+      - name: Actual Chromium UI states and responsive login smoke
+        run: |
+          npm run start -- -p 3000 > /tmp/orbit-next.log 2>&1 &
+          for i in $(seq 1 45); do if curl -fsS http://127.0.0.1:3000/login >/dev/null; then break; fi; sleep 2; done
+          npx playwright test tests/login-browser.spec.mjs --reporter=line
