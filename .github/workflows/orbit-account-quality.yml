@@ -1,0 +1,33 @@
+name: Orbit account and workspace quality
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lib/orbit-auth.ts"
+      - "app/api/auth/login/route.ts"
+      - "tests/auth-safety.test.mjs"
+      - ".github/workflows/orbit-account-quality.yml"
+  workflow_dispatch:
+jobs:
+  account-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Sign-in validation regression tests
+        run: node --experimental-strip-types --test tests/auth-safety.test.mjs
+      - name: Existing project regressions
+        run: npm run test:projects
+      - name: Lint
+        run: npm run lint
+      - name: Canonical production and offline build
+        run: npm run build
+      - name: Existing offline preservation regressions
+        run: npm run test:offline
