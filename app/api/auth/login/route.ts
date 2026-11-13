@@ -1,22 +1,30 @@
 import { NextResponse } from "next/server";
-import { authenticateOrbitUser, createOrbitSession, ORBIT_SESSION_COOKIE, safeReturnTo } from "../../../../lib/orbit-auth";
+import { authenticateOrbitUser, createOrbitSession, normalizeOrbitLoginInput, ORBIT_SESSION_COOKIE, safeReturnTo } from "../../../../lib/orbit-auth";
 
 export async function POST(request: Request) {
   const contentType = request.headers.get("content-type") ?? "";
-  let username = "";
-  let password = "";
-  let returnTo = "/today";
+  const isJson = contentType.includes("application/json");
+  const lengthHeader = request.headers.get("content-length");
+  if (lengthHeader && Number(lengthHeader) > 8_192) {
+    return NextResponse.json({ error: "Sign-in request is too large" }, { status: 413 });
+  }
 
-  if (contentType.includes("application/json")) {
-    const body = await request.json() as { username?: string; password?: string; returnTo?: string };
-    username = body.username ?? "";
-    password = body.password ?? "";
-    returnTo = safeReturnTo(body.returnTo);
-  } else {
-    const form = await request.formData();
-    username = String(form.get("username") ?? "");
-    password = String(form.get("password") ?? "");
-    returnTo = safeReturnTo(String(form.get("returnTo") ?? "/today"));
+  let username: string;
+  let password: string;
+  let returnTo: string;
+  try {
+    const raw = isJson
+      ? await request.json()
+      : await request.formData().then(form => ({
+          username: form.get("username"),
+          password: form.get("password"),
+          returnTo: form.get("returnTo"),
+        }));
+    const input = normalizeOrbitLoginInput(raw);
+    if (!input) return NextResponse.json({ error: "Invalid sign-in request" }, { status: 400 });
+    ({ username, password, returnTo } = input);
+  } catch {
+    return NextResponse.json({ error: "Invalid sign-in request" }, { status: 400 });
   }
 
   const user = authenticateOrbitUser(username, password);
