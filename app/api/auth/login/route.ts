@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authenticateOrbitUser, createOrbitSession, normalizeOrbitLoginInput, ORBIT_SESSION_COOKIE, safeReturnTo } from "../../../../lib/orbit-auth";
+import { authenticateOrbitUser, createOrbitSession, normalizeOrbitLoginInput, ORBIT_SESSION_COOKIE } from "../../../../lib/orbit-auth";
 
 export async function POST(request: Request) {
   const contentType = request.headers.get("content-type") ?? "";
