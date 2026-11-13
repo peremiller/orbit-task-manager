@@ -27,7 +27,26 @@ const PASSWORD_HASH = "ade74ee4ae698477cc7077e0aff407cd6a65e450f731a763e43d799ea
 const DEVELOPMENT_SESSION_SECRET = "orbit-local-development-session-secret";
 const SESSION_LIFETIME_SECONDS = 60 * 60 * 24 * 7;
 
+// Reject malformed and excessively large unauthenticated inputs before any scrypt work.
+export function normalizeOrbitLoginInput(value: unknown): { username: string; password: string; returnTo: string } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if (typeof input.username !== "string" || typeof input.password !== "string") return null;
+  if (!isReasonableCredentialInput(input.username, input.password)) return null;
+  return {
+    username: input.username,
+    password: input.password,
+    returnTo: safeReturnTo(typeof input.returnTo === "string" ? input.returnTo : null),
+  };
+}
+
+function isReasonableCredentialInput(username: string, password: string): boolean {
+  return username.trim().length > 0 && Buffer.byteLength(username, "utf8") <= 256
+    && password.length > 0 && Buffer.byteLength(password, "utf8") <= 1024;
+}
+
 export function authenticateOrbitUser(username: string, password: string): OrbitUser | null {
+  if (!isReasonableCredentialInput(username, password)) return null;
   const normalizedUsername = normalizeUsername(username);
   const expectedUsername = normalizeUsername(process.env.ORBIT_ADMIN_USERNAME ?? DEFAULT_USER.username);
   if (!safeTextEqual(normalizedUsername, expectedUsername)) return null;
