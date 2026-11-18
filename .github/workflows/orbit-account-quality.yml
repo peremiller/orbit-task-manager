@@ -8,6 +8,14 @@ on:
       - "tests/auth-safety.test.mjs"
       - "tests/login-browser.spec.mjs"
       - ".github/workflows/orbit-account-quality.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "lib/orbit-auth.ts"
+      - "app/api/auth/login/route.ts"
+      - "tests/auth-safety.test.mjs"
+      - "tests/login-browser.spec.mjs"
+      - ".github/workflows/orbit-account-quality.yml"
   workflow_dispatch:
 jobs:
   account-quality:
