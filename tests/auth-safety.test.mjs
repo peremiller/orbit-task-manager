@@ -33,3 +33,27 @@ test("untrusted return paths never navigate outside this application", () => {
   assert.equal(normalizeOrbitLoginInput({ username: "user", password: "pass", returnTo: "//evil.example" })?.returnTo, "/today");
   assert.equal(normalizeOrbitLoginInput({ username: "user", password: "pass", returnTo: 123 })?.returnTo, "/today");
 });
+
+test("production denies missing or malformed owner credentials but accepts explicit valid config", async () => {
+  const { scryptSync } = await import("node:crypto");
+  const keys = ["NODE_ENV", "ORBIT_PASSWORD_SALT", "ORBIT_PASSWORD_HASH"];
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  try {
+    process.env.NODE_ENV = "production";
+    delete process.env.ORBIT_PASSWORD_SALT;
+    delete process.env.ORBIT_PASSWORD_HASH;
+    assert.equal(authenticateOrbitUser("aj.miller", "integration-only-password"), null);
+    process.env.ORBIT_PASSWORD_SALT = "integration-only-test-salt";
+    assert.equal(authenticateOrbitUser("aj.miller", "integration-only-password"), null);
+    process.env.ORBIT_PASSWORD_HASH = "not-hex";
+    assert.equal(authenticateOrbitUser("aj.miller", "integration-only-password"), null);
+    process.env.ORBIT_PASSWORD_HASH = scryptSync("integration-only-password", process.env.ORBIT_PASSWORD_SALT, 64).toString("hex");
+    assert.equal(authenticateOrbitUser("aj.miller", "wrong-password"), null);
+    assert.equal(authenticateOrbitUser("aj.miller", "integration-only-password")?.username, "aj.miller");
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
+});
