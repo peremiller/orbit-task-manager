@@ -51,8 +51,15 @@ export function authenticateOrbitUser(username: string, password: string): Orbit
   const expectedUsername = normalizeUsername(process.env.ORBIT_ADMIN_USERNAME ?? DEFAULT_USER.username);
   if (!safeTextEqual(normalizedUsername, expectedUsername)) return null;
 
-  const suppliedHash = scryptSync(password, process.env.ORBIT_PASSWORD_SALT ?? PASSWORD_SALT, 64);
-  const expectedHash = Buffer.from(process.env.ORBIT_PASSWORD_HASH ?? PASSWORD_HASH, "hex");
+  // Production must never authenticate against the development-only bundled hash.
+  // Missing or malformed owner-managed credentials fail closed without changing stored data.
+  const configuredSalt = process.env.ORBIT_PASSWORD_SALT;
+  const configuredHash = process.env.ORBIT_PASSWORD_HASH;
+  if (process.env.NODE_ENV === "production" && (!configuredSalt || !configuredHash)) return null;
+  const expectedHex = configuredHash ?? PASSWORD_HASH;
+  if (!/^[0-9a-f]{128}$/i.test(expectedHex)) return null;
+  const suppliedHash = scryptSync(password, configuredSalt ?? PASSWORD_SALT, 64);
+  const expectedHash = Buffer.from(expectedHex, "hex");
   if (suppliedHash.length !== expectedHash.length || !timingSafeEqual(suppliedHash, expectedHash)) return null;
 
   return {
